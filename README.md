@@ -15,10 +15,10 @@ DripDrop is a database-driven, multi-channel messaging sequence engine for Elixi
 ## Tech Stack
 
 **Required:**
-- PostgreSQL with schemas support
-- [pg_evolver](https://github.com/agoodway/pg_evolver) - Schema management
-- [pgflow](https://github.com/agoodway/pgflow) - Default job scheduler
-- [crontab](https://hex.pm/packages/crontab) - Cron and human-friendly scheduling
+- PostgreSQL 17+ with schemas support
+- [ecto_evolver](https://github.com/agoodway/ecto_evolver) - Versioned SQL migrations for Elixir libraries
+- [pgflow](https://github.com/agoodway/pgflow) - Default workflow/job execution engine
+- [crontab](https://hex.pm/packages/crontab) - Cron parsing/validation
 - Ecto - Database layer
 
 **Optional:**
@@ -29,13 +29,38 @@ DripDrop is a database-driven, multi-channel messaging sequence engine for Elixi
 - MJML - Responsive email templates
 - ReqLLM + Zoi - AI template generation
 
+## Architecture
+
+DripDrop stores sequence configuration, enrollment state, delivery policy, and provider event history in the `dripdrop` schema. PgFlow stores workflow/job runtime state in its own `pgflow` schema. The two schemas are intentionally separate: DripDrop owns messaging domain data; PgFlow owns queueing, worker coordination, retries, and run history.
+
+DripDrop uses a durable dispatch boundary. Public APIs write sequence/enrollment/execution records through Ecto transactions, then enqueue PgFlow work using stable database IDs. Dispatch workers claim due executions from the database, evaluate policy and conditions, send through the selected adapter, persist provider results, and schedule the next transition.
+
+Step execution is idempotent. Each execution has a stable idempotency key and can be retried after worker crashes or transient provider failures without intentionally sending duplicate messages. Provider-specific idempotency is used where available.
+
+Sequences support both linear ordering and explicit transitions. `position` is useful for authoring and display; branching uses `step_transitions` plus conditions so a sequence can express entry points, exits, fallback paths, and multiple conditional next steps.
+
+Messaging policy is part of the core domain. Suppression, consent, unsubscribe, bounce, complaint, reply, rate-limit, quiet-hour, and provider event handling are checked before or during dispatch, not bolted onto individual adapters.
+
+Cold outbound and lifecycle/transactional messaging are treated as different operating modes. Cold outbound defaults to plain text, separate sending domains/mailboxes, verified addresses, and conservative per-inbox volume. Lifecycle and transactional email can use HTML/MJML but still requires sender authentication, applicable unsubscribe headers, and bounce/complaint handling.
+
 ## Database Architecture
 
-### Schema: `dripdrop` (pg_evolver managed)
+### Schema: `dripdrop` (ecto_evolver managed)
+
+```sql
+CREATE SCHEMA dripdrop;
+```
+
+DripDrop uses `ecto_evolver` with raw SQL migrations:
 
 ```elixir
-# Isolated PostgreSQL schema
-CREATE SCHEMA dripdrop;
+defmodule DripDrop.Migration do
+  use EctoEvolver,
+    otp_app: :dripdrop,
+    default_prefix: "dripdrop",
+    versions: [DripDrop.Migrations.V01],
+    tracking_object: {:view, "dripdrop_version"}
+end
 ```
 
 **Core Tables:**
@@ -43,6 +68,7 @@ CREATE SCHEMA dripdrop;
 ```elixir
 # dripdrop.sequences
 - id (uuid, pk)
+- tenant_key (string, nullable) - optional host-app tenant/account boundary
 - name (string)
 - key (string, unique)
 - description (text)
@@ -56,8 +82,9 @@ CREATE SCHEMA dripdrop;
 - sequence_id (uuid, fk)
 - version (integer)
 - name (string)
-- active (boolean)
+- state (string) - "draft", "active", "archived"
 - config (jsonb)
+- published_at (utc_datetime)
 - inserted_at, updated_at
 - unique constraint: [sequence_id, version]
 
@@ -79,12 +106,22 @@ CREATE SCHEMA dripdrop;
 - inserted_at, updated_at
 - unique constraint: [sequence_version_id, key]
 
+# dripdrop.step_transitions
+- id (uuid, pk)
+- sequence_version_id (uuid, fk)
+- from_step_id (uuid, fk nullable) - null means sequence entry
+- to_step_id (uuid, fk nullable) - null means complete enrollment
+- condition_mode (string) - "always", "all", "any"
+- priority (integer)
+- config (jsonb)
+- inserted_at, updated_at
+
 # dripdrop.channel_adapters
 - id (uuid, pk)
 - name (string)
 - channel (string) - "email", "sms", etc.
 - provider (string) - "mailgun", "sendgrid", "twilio", etc.
-- credentials (binary) - encrypted with Ecto crypto
+- credentials (binary) - encrypted with Cloak/Ecto encrypted type
 - config (jsonb)
 - is_default (boolean)
 - active (boolean)
@@ -92,7 +129,8 @@ CREATE SCHEMA dripdrop;
 
 # dripdrop.conditions
 - id (uuid, pk)
-- step_id (uuid, fk)
+- step_id (uuid, fk nullable)
+- transition_id (uuid, fk nullable)
 - condition_type (string) - "hook", "enrollment_data", "event", "time_window"
 - operator (string) - "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains"
 - hook_function (string) - for Elixir module hooks
@@ -129,7 +167,7 @@ CREATE SCHEMA dripdrop;
 - sequence_id (uuid, fk)
 - sequence_version_id (uuid, fk)
 - subscriber_type (string) - polymorphic: "User", "Lead", etc.
-- subscriber_id (uuid)
+- subscriber_id (string) - host-app identifier; do not require UUID
 - state (string) - "active", "paused", "completed", "cancelled"
 - current_step_id (uuid, fk nullable)
 - started_at (utc_datetime)
@@ -144,31 +182,80 @@ CREATE SCHEMA dripdrop;
 - id (uuid, pk)
 - enrollment_id (uuid, fk)
 - step_id (uuid, fk)
-- state (string) - "scheduled", "sending", "sent", "failed", "skipped"
+- state (string) - "scheduled", "claiming", "sending", "sent", "failed", "skipped", "cancelled"
 - scheduled_for (utc_datetime)
+- claimed_at (utc_datetime)
 - executed_at (utc_datetime)
 - failed_at (utc_datetime)
 - retry_count (integer, default: 0)
+- idempotency_key (string, unique)
+- pgflow_run_id (string nullable)
 - channel (string)
 - recipient (string) - email, phone, url, etc.
 - payload (jsonb)
 - response (jsonb)
+- provider_message_id (string)
 - error_message (text)
 - inserted_at, updated_at
 
 # dripdrop.events
 - id (uuid, pk)
-- enrollment_id (uuid, fk)
+- enrollment_id (uuid, fk nullable)
+- subscriber_type (string, nullable)
+- subscriber_id (string, nullable)
 - event_type (string) - "user_action", "milestone", "custom"
 - event_key (string)
 - event_data (jsonb)
 - occurred_at (utc_datetime)
 - inserted_at, updated_at
+
+# dripdrop.suppressions
+- id (uuid, pk)
+- channel (string)
+- recipient (string)
+- reason (string) - "unsubscribe", "bounce", "complaint", "manual", "provider_block"
+- source (string)
+- metadata (jsonb)
+- inserted_at, updated_at
+- unique constraint: [channel, recipient]
+
+# dripdrop.message_events
+- id (uuid, pk)
+- step_execution_id (uuid, fk nullable)
+- channel (string)
+- provider (string)
+- provider_message_id (string)
+- event_type (string) - "delivered", "bounced", "complained", "opened", "clicked", "replied", "unsubscribed"
+- event_data (jsonb)
+- occurred_at (utc_datetime)
+- inserted_at
+
+# dripdrop.short_links
+- id (uuid, pk)
+- step_execution_id (uuid, fk nullable)
+- provider (string) - "dub", "goodanalytics", "module", "webhook", "none"
+- original_url (text)
+- destination_url (text) - final URL sent to provider after UTM/enrichment
+- short_url (text)
+- external_id (string)
+- idempotency_key (string, unique)
+- metadata (jsonb)
+- inserted_at, updated_at
 ```
+
+Constraints and indexes:
+
+- Unique sequence keys include tenant scope when `tenant_key` is used.
+- Allow only one active sequence version per sequence with a partial unique index.
+- Enforce unique step keys and positions per sequence version.
+- Index due work by `(state, scheduled_for)` and enrollment state by `(sequence_id, state)`.
+- Index event lookup by `(subscriber_type, subscriber_id, event_key, occurred_at)`.
+- Use GIN indexes on JSONB only for documented query paths; avoid indexing every metadata field by default.
+- Claim due executions with a compare-and-set update or row lock. Never rely on in-memory process state for execution ownership.
 
 ## Timing Configuration
 
-Uses `crontab` library for flexible scheduling.
+Uses `crontab` for cron parsing/validation. Human-friendly expressions such as `"every monday at 9am"` require a DripDrop parser that converts to either cron or delay configuration before storage.
 
 ### Timing Struct (Embedded in Step)
 
@@ -536,17 +623,38 @@ step_config = %{
 
 ### Default: pgflow
 
-DripDrop uses pgflow for job scheduling. No configuration needed beyond specifying workflow table in `dripdrop` schema.
+DripDrop uses PgFlow for durable execution, not as tables embedded in the `dripdrop` schema. PgFlow installs and owns the `pgflow` schema; DripDrop installs and owns the `dripdrop` schema.
+
+Required PgFlow setup in the host app:
+
+```bash
+mix pgflow.gen.postgres_extensions_migration
+mix pgflow.gen.pgmq_migration
+mix pgflow.setup
+mix pgflow.gen.job_migration DripDrop.Jobs.DispatchStep
+mix ecto.migrate
+```
+
+If the deployment cannot enable pg_cron, generate extensions with `--no-cron`. DripDrop can still run delay/event-driven executions through PgFlow workers, but cron-triggered steps require either pg_cron or an alternate scheduler.
 
 ```elixir
 # config/config.exs
+config :my_app, MyApp.PgFlow,
+  repo: MyApp.Repo,
+  jobs: [DripDrop.Jobs.DispatchStep],
+  signal_strategy: :notify
+
 config :dripdrop,
-  scheduler: DripDrop.Schedulers.Pgflow,
-  pgflow: [
-    workflows_table: "dripdrop.workflows",
-    steps_table: "dripdrop.workflow_steps"
-  ]
+  repo: MyApp.Repo,
+  scheduler: DripDrop.Schedulers.Pgflow
 ```
+
+Dispatch model:
+
+- `DripDrop.enroll/1` creates an enrollment and the first `step_execution` rows inside one `Ecto.Multi`.
+- A PgFlow job receives only stable IDs, for example `%{"step_execution_id" => "..."}`.
+- The worker claims the execution with a compare-and-set update, checks suppressions/conditions/quiet hours, renders payload, sends via the adapter, stores provider response, and advances the enrollment.
+- Retries must be idempotent. Use `step_executions.idempotency_key` and provider-specific idempotency support where available.
 
 ### Alternative: Oban
 
@@ -579,6 +687,8 @@ end
 ```
 
 ## Hook System
+
+Hooks must never run unbounded in the caller's request path. Evaluate hooks inside dispatch jobs with explicit timeouts, structured errors, and cached results when the same hook is used by multiple conditions/templates in one execution.
 
 ### Elixir Module Hooks
 
@@ -641,6 +751,137 @@ DripDrop.create_condition(step.id, %{
 ```
 
 ## Channel Implementations
+
+Channel modules return structured results:
+
+```elixir
+{:ok, %{provider_message_id: "...", response: %{}}}
+{:error, %{kind: :temporary | :permanent, reason: term()}}
+```
+
+Temporary errors retry. Permanent errors fail the execution and may write a suppression, depending on channel/provider event type.
+
+### Link Shortening
+
+Link shortening runs after template rendering and before channel delivery:
+
+1. Render the template into channel-specific content.
+2. Extract eligible links from HTML, text, SMS, Slack, Telegram, or webhook payloads.
+3. Normalize and enrich each destination URL with configured tracking parameters.
+4. Create or reuse short links through the configured short-link provider.
+5. Replace the original URLs in the rendered payload.
+6. Persist `short_links` rows tied to the `step_execution_id`.
+
+Short-link generation is idempotent. DripDrop computes a stable idempotency key from the execution, original URL, destination URL, provider, and provider config. Retries reuse the existing `short_links` row instead of creating a new short link.
+
+```elixir
+defmodule DripDrop.ShortLinks.Adapter do
+  @callback create_link(DripDrop.ShortLinks.Request.t(), keyword()) ::
+              {:ok, DripDrop.ShortLinks.Result.t()}
+              | {:error, %{kind: :temporary | :permanent, reason: term()}}
+end
+```
+
+```elixir
+%DripDrop.ShortLinks.Request{
+  idempotency_key: "...",
+  original_url: "https://example.com/pricing",
+  destination_url: "https://example.com/pricing?utm_campaign=onboarding",
+  tenant_key: "acct_123",
+  channel: "email",
+  sequence_key: "onboarding",
+  step_key: "trial_reminder",
+  metadata: %{
+    "enrollment_id" => "...",
+    "step_execution_id" => "..."
+  }
+}
+```
+
+Built-in provider shapes:
+
+- `DripDrop.ShortLinks.Dub`: Calls Dub's create link API with `url`, `domain`, `key` or `prefix`, `externalId`, `tenantId`, `tagNames`, `comments`, `expiresAt`, and `trackConversion`.
+- `DripDrop.ShortLinks.GoodAnalytics`: Calls the local `GoodAnalytics.create_link/1` library API. It creates tracked links in the host application's `good_analytics` schema and returns `https://domain/key` as the injected URL.
+- `DripDrop.ShortLinks.Module`: Calls a user-provided Elixir module implementing `DripDrop.ShortLinks.Adapter`.
+- `DripDrop.ShortLinks.Webhook`: Posts the request to an HTTP endpoint and expects a normalized short-link response.
+- `DripDrop.ShortLinks.None`: Leaves URLs unchanged while still allowing UTM/enrichment if configured.
+
+```elixir
+config :dripdrop,
+  short_links: [
+    adapter: DripDrop.ShortLinks.Dub,
+    domain: "go.example.com",
+    track_conversion: true,
+    tag_names: ["dripdrop"],
+    external_id: :idempotency_key
+  ]
+```
+
+GoodAnalytics library mode:
+
+```elixir
+config :dripdrop,
+  short_links: [
+    adapter: DripDrop.ShortLinks.GoodAnalytics,
+    workspace_id: {MyApp.Workspaces, :current_good_analytics_workspace_id},
+    domain: "go.example.com",
+    key_strategy: :slug_from_idempotency_key,
+    link_type: "campaign",
+    utm_source: "dripdrop",
+    utm_medium: :channel,
+    external_id: :idempotency_key
+  ]
+```
+
+The GoodAnalytics adapter maps a DripDrop short-link request to `GoodAnalytics.create_link/1`:
+
+```elixir
+%{
+  workspace_id: request.workspace_id,
+  domain: config.domain,
+  key: generated_key,
+  url: request.destination_url,
+  link_type: "campaign",
+  utm_source: "dripdrop",
+  utm_medium: request.channel,
+  utm_campaign: request.sequence_key,
+  utm_content: request.step_key,
+  external_id: request.idempotency_key,
+  metadata: request.metadata
+}
+```
+
+GoodAnalytics Pro is used through the webhook adapter unless DripDrop runs in the same BEAM/database as the Pro app. In the same app, use `DripDrop.ShortLinks.GoodAnalytics`; across app boundaries, use `DripDrop.ShortLinks.Webhook` pointed at the Pro API.
+
+Shortening can be configured globally, per tenant, per sequence, per step, or per channel. Step-level configuration wins over sequence configuration, which wins over tenant/global defaults.
+
+```elixir
+DripDrop.create_step(v1.id, %{
+  name: "Trial Reminder",
+  key: "trial_reminder",
+  channel: "email",
+  timing: %{type: "delay", delay_amount: 3, delay_unit: "days"},
+  config: %{
+    "subject" => "Still evaluating?",
+    "body" => ~s(<a href="https://example.com/pricing">Compare plans</a>),
+    "short_links" => %{
+      "enabled" => true,
+      "provider" => "dub",
+      "domain" => "go.example.com",
+      "track_conversion" => true
+    }
+  }
+})
+```
+
+Eligibility rules:
+
+- Only `http` and `https` URLs are shortened.
+- Already-shortened URLs from configured short domains are skipped.
+- Unsubscribe, privacy policy, mailto, tel, signed, password reset, and one-time token links are excluded by default.
+- Providers that require caller-supplied slugs, such as GoodAnalytics, generate deterministic keys from the idempotency key unless a step provides an explicit key strategy.
+- HTML rewriting uses an HTML parser. Text rewriting uses URL tokenization that preserves trailing punctuation.
+- If shortening fails with a temporary error, the dispatch follows the step retry policy. If it fails permanently, the step can either fail or send original URLs based on `short_links.on_error`.
 
 ### Email Channel
 
@@ -893,6 +1134,26 @@ defmodule DripDrop.TemplateBuilder.AI do
 end
 ```
 
+## Messaging Policy
+
+- **Suppression and consent**: Check unsubscribe, bounce, complaint, and manual suppression before every send. Store suppression at normalized recipient/channel scope.
+- **Email authentication**: Applications using email channels must configure SPF, DKIM, and DMARC for sending domains. Bulk mail should include `List-Unsubscribe` and one-click unsubscribe headers where applicable.
+- **Cold email limits**: Cold outbound should use separate domains/mailboxes from the primary domain, verify addresses before sending, keep bounce rate under 2%, and cap volume conservatively per inbox/domain. Default cold templates should be plain text.
+- **Rate limits**: Add per-adapter, per-provider, per-domain, and per-recipient throttles. Provider APIs and inbox providers enforce limits differently.
+- **Quiet hours and time zones**: Respect recipient timezone, local business-hour windows, weekends/holidays where configured, and daylight-saving transitions.
+- **Inbound events**: Bounces, complaints, replies, unsubscribe clicks, webhook callbacks, and provider delivery events must feed `message_events` and may pause/cancel enrollments.
+- **Auditability**: Store rendered payload snapshots, adapter used, provider response, and condition decisions for each execution. Avoid storing secrets in payload snapshots.
+- **Data retention**: Provide cleanup/archive policies for events, rendered payloads, provider responses, and old PgFlow runs.
+- **Security**: Encrypt adapter credentials and hook auth config, support key rotation, redact secrets from logs/telemetry, and avoid converting untrusted input to atoms.
+
+## Implementation Boundaries
+
+- Tenancy is represented by `tenant_key` where needed. If a host application uses account-level scoping, sequence keys, adapter defaults, suppressions, and enrollment uniqueness include the tenant scope.
+- Dynamic customer-authored sequences use one stable PgFlow dispatch job and keep sequencing logic in DripDrop tables. Static developer-authored jobs or operational workflows can still use native PgFlow flows.
+- Liquid/Solid is the default template engine for user-authored templates. EEx is reserved for trusted module templates.
+- Provider webhook handling is part of the adapter contract. Email/SMS adapters normalize provider callbacks into `message_events` and update suppressions for bounces, complaints, and unsubscribes.
+- Payload snapshots are retained for auditability with redaction. Applications handling sensitive data can disable payload snapshots or configure retention windows.
+
 ## Real-World Examples
 
 ### Example 1: SaaS Onboarding
@@ -1140,7 +1401,7 @@ DripDrop.create_condition(hot_step.id, %{
 def deps do
   [
     {:dripdrop, "~> 0.1"},
-    {:pg_evolver, "~> 0.1"},
+    {:ecto_evolver, "~> 0.1"},
     {:pgflow, "~> 0.1"},
     {:crontab, "~> 1.1"},
     {:cloak_ecto, "~> 1.2"},
@@ -1178,7 +1439,12 @@ config :dripdrop, DripDrop.Vault,
 
 ```bash
 # Setup
+mix pgflow.gen.postgres_extensions_migration
+mix pgflow.gen.pgmq_migration
+mix pgflow.setup
+mix pgflow.gen.job_migration DripDrop.Jobs.DispatchStep
 mix dripdrop.setup
+mix ecto.migrate
 ```
 
 ## API
@@ -1215,12 +1481,14 @@ DripDrop.list_active_enrollments(sequence_key)
 
 ## Architecture Summary
 
-- **Database**: Isolated `dripdrop` schema via pg_evolver
-- **Scheduler**: pgflow (default) or Oban
-- **Timing**: Crontab for flexible scheduling (cron expressions + human-friendly)
+- **Database**: Isolated `dripdrop` schema via ecto_evolver raw SQL migrations
+- **Execution**: PgFlow owns the `pgflow` schema and runs DripDrop dispatch jobs/flows
+- **Timing**: Crontab for validation/parsing; PgFlow/pg_cron or dispatch jobs for execution
 - **Channels**: Email, SMS, Webhook, PubSub, Slack, Telegram (extensible)
 - **Adapters**: Database-stored with encrypted credentials, multiple per channel
 - **Hooks**: Elixir modules OR HTTP endpoints (n8n, Zapier, APIs)
 - **Templates**: Liquid, MJML, Mustache, EEx
+- **Short links**: Pluggable providers for Dub, GoodAnalytics, custom Elixir modules, webhooks, or no-op rewriting
 - **Dashboard**: Optional LiveView mount via router (pgflow pattern)
 - **AI Builder**: Optional module with ReqLLM + Zoi
+- **Messaging policy**: Branching transitions, suppression/consent, idempotent dispatch, provider events, rate limits, quiet hours, key rotation, data retention
