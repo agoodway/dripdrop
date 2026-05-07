@@ -48,6 +48,22 @@ The system SHALL render `url` and `body_template` through the same template engi
 - **WHEN** a hook has `body_template: ~s({"email": "{{email}}"})` and the enrollment has `data.email = "ada@example.com"`
 - **THEN** the rendered body is `{"email": "ada@example.com"}`.
 
+### Requirement: HTTP Hook URLs Are Validated Against Private Networks
+
+To mitigate SSRF, the system SHALL reject HTTP hook URLs whose scheme is not `https` (with an opt-in `:http_hook_allow_http` config flag for development) and whose resolved IP addresses fall in any reserved range: RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, multicast, future-use, RFC 5737 documentation ranges, and IPv6 unique-local (`fc00::/7`). Validation SHALL run twice: at `HttpHook` create/update time on the URL shape, and again at evaluator time on the rendered URL after Liquid expansion. The evaluator SHALL also disable HTTP redirects so the resolved host cannot be swapped at fetch time. Blocked URLs SHALL emit a `[:dripdrop, :hook, :url_blocked]` telemetry event with `http_hook_id`, `tenant_key`, the rejected URL, and the reason.
+
+#### Scenario: Reject AWS metadata endpoint
+- **WHEN** an `HttpHook` is created with `url: "https://169.254.169.254/latest/meta-data/"`
+- **THEN** the changeset accepts the literal URL only if it is a Liquid template; the evaluator rejects the rendered URL with `{:error, {:url_blocked, :private_address}}` and emits the telemetry event.
+
+#### Scenario: Liquid template that resolves to a private host
+- **WHEN** a hook has `url: "https://{{host}}/score"` and the enrollment data renders the URL to `https://10.0.0.1/score`
+- **THEN** the evaluator's post-render validation rejects the request before any network call and emits `[:dripdrop, :hook, :url_blocked]` with `reason: :private_address`.
+
+#### Scenario: Reject non-HTTPS schemes
+- **WHEN** an `HttpHook` is created with `url: "ftp://example.com/path"`
+- **THEN** the changeset returns `{:error, ...}` with `scheme must be https`.
+
 ### Requirement: Response Extraction Coerces To Declared Type
 
 When `response_type` is `number | boolean`, the system SHALL coerce the JSONPath-extracted value to that type and return `{:error, :coercion}` if coercion fails. When `response_type` is `text`, the value SHALL be returned as a string. When `response_type` is `json`, the entire decoded JSON SHALL be returned as a map/list.

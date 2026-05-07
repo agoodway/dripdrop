@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.cron }} / ${{ matrix.command }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cron: [with-cron, no-cron]
+        command: [quality, test, dialyzer]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Postgres image with pgmq + pg_cron
+        if: matrix.cron == 'with-cron'
+        run: docker build -t dripdrop-postgres:ci .
+
+      - name: Start Postgres with pg_cron
+        if: matrix.cron == 'with-cron'
+        run: |
+          docker run -d \
+            --name dripdrop-db \
+            -e POSTGRES_DB=dripdrop_dev \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 54325:5432 \
+            dripdrop-postgres:ci \
+            postgres -c cron.database_name=dripdrop_dev
+
+      - name: Start Postgres without pg_cron
+        if: matrix.cron == 'no-cron'
+        run: |
+          docker run -d \
+            --name dripdrop-db \
+            -e POSTGRES_DB=dripdrop_dev \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 54325:5432 \
+            postgres:18
+
+      - name: Wait for Postgres
+        run: |
+          for attempt in {1..30}; do
+            if docker exec dripdrop-db pg_isready -U postgres -d dripdrop_dev; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs dripdrop-db
+          exit 1
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.17.3"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix ${{ matrix.command }}
+        env:
+          DRIPDROP_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DRIPDROP_NO_CRON: ${{ matrix.cron == 'no-cron' && 'true' || 'false' }}

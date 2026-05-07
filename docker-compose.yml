@@ -1,0 +1,18 @@
+services:
+  db:
+    build:
+      context: ./database
+      dockerfile: Dockerfile.postgres
+    ports:
+      - "54325:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./database/tests:/tests
+    environment:
+      POSTGRES_DB: dripdrop_dev
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: postgres -c cron.database_name=dripdrop_dev
+
+volumes:
+  pgdata:

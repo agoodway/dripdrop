@@ -5,7 +5,7 @@ DripDrop is a fresh repository — no prior code, no prior specs. The README def
 Stakeholders: the eventual host applications that will mount DripDrop — both single-tenant SaaS apps (one set of sequences) and multi-tenant platforms (per-account sequences). Operators of those host apps care most about deliverability, audit fidelity, and not corrupting their primary marketing-domain reputation; product teams care about the authoring API and the dashboard.
 
 Constraints carried over from the README:
-- PostgreSQL 17+ with `pgmq`; `pg_cron` strongly preferred but optional.
+- PostgreSQL 18+ with `pgmq`; `pg_cron` strongly preferred but optional. Postgres 18 supplies the native `uuidv7()` primary-key default used by every dripdrop table.
 - Schema isolation: `dripdrop` for messaging domain, `pgflow` for runtime — DripDrop must never write to `pgflow` directly.
 - Cloak-encrypted credentials.
 - Idempotent dispatch (workers can crash mid-send without producing duplicates).
@@ -53,17 +53,17 @@ Default `DripDrop.Schedulers.Pgflow` calls `PgFlow.enqueue/2` with `%{step_execu
 
 When `pg_cron` is installed, `mix dripdrop.setup` registers a SQL function that, every minute, scans active sequences with cron-typed steps and inserts due `step_executions`. When unavailable, `DripDrop.Jobs.CronTick` (a PgFlow job) does the same scan from the BEAM. **Why:** pg_cron is more reliable (runs even if no Elixir node is up) and pushes the load to the DB; the Elixir tick is a workable fallback for hosts on managed Postgres without pg_cron. **Alternative:** Quantum. Rejected — Quantum schedules in-memory and loses jobs across deploys without an external persistence layer.
 
-### D6. One Cloak vault, one key, with a documented rotation path
+### D6. One Cloak vault, one key; rotation is the host's responsibility
 
-`DripDrop.Vault` reads `DRIPDROP_ENCRYPTION_KEY` (base64 AES-256). All encrypted columns use `Cloak.Ecto.Map`. Rotation is a documented `mix dripdrop.rotate_key` task that re-encrypts in batches. **Why:** Cloak is the de-facto standard, AES-256-GCM is the right cipher, and per-tenant keys add complexity that isn't justified for v1. **Risk:** a single compromised key exposes all credentials — partially mitigated by the no-secrets-in-logs rule and by treating the env var with the same rigor as the DB password.
+`DripDrop.Vault` reads `DRIPDROP_ENCRYPTION_KEY` (base64 AES-256). All encrypted columns use `Cloak.Ecto.Map`. **Why:** Cloak is the de-facto standard, AES-256-GCM is the right cipher, and per-tenant keys add complexity that isn't justified for v1. **Rotation is left to hosts** — Cloak's standard `Cloak.Vault` rotation flow (re-encrypt rows in batches with the old + new ciphers configured) is straightforward in plain Elixir, and shipping it as a Mix task added user-facing argv-secret risks for negligible value. **Risk:** a single compromised key exposes all credentials — partially mitigated by the no-secrets-in-logs rule and by treating the env var with the same rigor as the DB password.
 
 ### D7. `tenant_key` is a column on every domain table that needs scoping
 
 Tables that scope to a tenant: `sequences`, `channel_adapters`, `suppressions`, `short_links` (via execution), `enrollments` (via sequence). `step_executions`, `message_events`, and `events` denormalize `tenant_key` for query performance. Every public API takes an optional `tenant_key` and refuses operations across tenants. **Why:** simpler than a `tenants` table and avoids leaking foreign keys into a host-owned concept. **Alternative:** Postgres row-level security per session. Rejected for v1 — RLS is hard to test and hard to debug; we revisit when a host asks for it.
 
-### D8. Liquid (Solid) is the default user-authored template engine; EEx is module-only
+### D8. Liquid (Liquex) is the default user-authored template engine; EEx is module-only
 
-User-authored Liquid runs with strict mode off (missing variables are empty strings); EEx never sees user input. **Why:** Liquid syntax is the established lingua franca for marketing templates, and Solid's strict mode means we can render unknown variables as empty without exposing untrusted code paths. EEx in user input is a remote-code-execution vector — not negotiable. **Alternative:** Mustache (no logic) or Tera (Rust). Both rejected — Liquid is what users expect; Tera is a binary dependency we don't need.
+User-authored Liquid runs with strict mode off (missing variables are empty strings); EEx never sees user input. **Why:** Liquid syntax is the established lingua franca for marketing templates, and Liquex tracks Shopify Liquid compatibility closely while still letting us collect missing-variable warnings. EEx in user input is a remote-code-execution vector — not negotiable. **Alternative:** Mustache (no logic), Solid, or Tera (Rust). Mustache and Tera rejected — Liquid is what users expect; Tera is a binary dependency we don't need. Solid was replaced by Liquex for stronger Liquid compatibility.
 
 ### D9. Suppression is keyed on normalized recipient and is the universal precondition
 
@@ -110,23 +110,23 @@ Email providers shipped in v1: `mailgun`, `sendgrid`, `postmark`, `mailersend`, 
 ### D17. Dependency posture
 
 Hard deps: `ecto`, `ecto_sql`, `postgrex`, `pgflow` (GitHub), `ecto_evolver` (GitHub), `crontab`, `cloak_ecto`, `req`, `jason`, `plug`, `floki` (HTML rewrite for short-links).
-Optional deps (channels and conveniences): `swoosh` + `finch` (email), `solid` (Liquid templates), `mjml` (responsive email), `phoenix_pubsub` (in-app), `ex_aws_sns` (AWS SNS SMS).
+Optional deps (channels and conveniences): `swoosh` + `finch` (email), `mjml` (responsive email), `phoenix_pubsub` (in-app), `ex_aws_sns` (AWS SNS SMS).
 Quality deps (dev/test only, `runtime: false`): `credo ~> 1.7`, `dialyxir ~> 1.4`, `sobelow ~> 0.14`, `doctor ~> 0.22`, `ex_dna ~> 1.2`. Wired into a `mix quality` alias borrowed from the goodsupport pattern: `compile --warnings-as-errors`, `deps.unlock --unused`, `format --check-formatted`, `sobelow --config`, `ex_dna`, `doctor`, `credo --strict`.
 Future-optional: `phoenix_live_view` (full editable dashboard in a follow-on change), `req_llm` + `zoi` (AI builder).
 
-A capability fails compile (or boot) loudly when its optional dep is missing — see `DripDrop.startup_check/0` in tasks.md. **Why:** silent runtime failures (e.g., MJML compile error two weeks after deploy) are the worst kind. **Alternative:** make Swoosh/Solid hard deps. Rejected — host apps that don't use email shouldn't pull Swoosh's transitive surface.
+A capability fails compile (or boot) loudly when its optional dep is missing — see `DripDrop.startup_check/0` in tasks.md. **Why:** silent runtime failures (e.g., MJML compile error two weeks after deploy) are the worst kind. **Alternative:** make every provider dependency hard. Rejected — host apps that don't use a channel shouldn't pull that provider's transitive surface.
 
 ### D18. Demo lives at `demo/`, mirrors the pgflow pattern, ships docker setup at the repo root
 
-Structure: `demo/` is a sibling Phoenix 1.8 + LiveView 1.1 app with `{:dripdrop, path: ".."}`. The repo root carries a `Dockerfile` (Postgres 17 + pgmq v1.8.0 + pg_cron v1.6.4 baked in) and a `docker-compose.yml` exposing the `db` service. This deliberately copies pgflow's posture (see `/Users/chasepursley/Development/os/pgflow/Dockerfile`), so anyone coming from pgflow recognises the layout immediately. **Why one app instead of three:** a single demo means one Postgres image, one CI matrix, one set of seeds, and one place to wire the dispatch worker, ingest plug, and dashboard side-by-side. **Why a read-only dashboard inside the demo:** the editable dashboard is deferred to `add-dripdrop-dashboard`, but operators still need to see what's happening in their fixture data — read-only LiveViews give us 80% of the visibility for 5% of the surface area, and they can be migrated to the full dashboard later by promoting the views into a router macro. **Trade-off:** the demo can drift toward kitchen-sink. Mitigation — every scenario lives in its own `lib/dripdrop_demo_web/live/scenarios/<name>/` module with no shared business logic, and `mix demo.seed` is the only sanctioned way to load fixtures.
+Structure: `demo/` is a sibling Phoenix 1.8 + LiveView 1.1 app with `{:dripdrop, path: ".."}`. The repo root carries a `Dockerfile` (Postgres 18 + pg_cron preloaded) and a `docker-compose.yml` exposing the `db` service. pgmq and pgflow are installed through PgFlow-generated migrations, matching how host apps adopt PgFlow. **Why one app instead of three:** a single demo means one Postgres image, one CI matrix, one set of seeds, and one place to wire the dispatch worker, ingest plug, and dashboard side-by-side. **Why a read-only dashboard inside the demo:** the editable dashboard is deferred to `add-dripdrop-dashboard`, but operators still need to see what's happening in their fixture data — read-only LiveViews give us 80% of the visibility for 5% of the surface area, and they can be migrated to the full dashboard later by promoting the views into a router macro. **Trade-off:** the demo can drift toward kitchen-sink. Mitigation — every scenario lives in its own `lib/dripdrop_demo_web/live/scenarios/<name>/` module with no shared business logic, and `mix demo.seed` is the only sanctioned way to load fixtures.
 
-Mix tooling parallels pgflow's: DripDrop ships `mix dripdrop.setup` (with `--no-cron` to align with pgflow), `mix dripdrop.stamp` (adopt an existing `dripdrop` schema into evolver tracking), `mix dripdrop.check_schema`, `mix dripdrop.gen.key`, `mix dripdrop.rotate_key`, `mix dripdrop.uninstall`. We do NOT ship `dripdrop.gen.pgmq_migration` or `dripdrop.gen.postgres_extensions_migration` — those are pgflow's responsibility and DripDrop just runs after them.
+Mix tooling parallels pgflow's: DripDrop ships `mix dripdrop.setup` (with `--no-cron` to align with pgflow), `mix dripdrop.check_schema`, and `mix dripdrop.uninstall`. We do NOT ship `dripdrop.gen.pgmq_migration` or `dripdrop.gen.postgres_extensions_migration` — those are pgflow's responsibility and DripDrop just runs after them. Cloak key rotation is also not shipped as a Mix task; hosts use Cloak's standard rotation flow in their own scripts.
 
 ## Risks / Trade-offs
 
 - **Risk:** Cron-driven steps without pg_cron rely on the BEAM tick — if no node is running, those steps stall. → **Mitigation:** ship pg_cron as the recommended path; document `DripDrop.Jobs.CronTick` as a fallback; emit telemetry when the tick lags.
 - **Risk:** Idempotency-key formula bakes `scheduled_for` truncated to minute — if a step is rescheduled by ≥1 minute (e.g., from quiet-hours deferral), the key changes and provider-side dedup is lost. → **Mitigation:** when policy reschedules, we track the *original* `scheduled_for` in `step_executions.metadata.original_scheduled_for` and use it for the idempotency key. Documented.
-- **Risk:** Cold-outbound mode adds rules (per-mailbox cap, plain-text only, sender-domain isolation) that conflict with hosts that want to use the same library for both modes on the same domain. → **Mitigation:** modes are step-level, not adapter-level; the same adapter can serve both as long as the operator accepts the deliverability risk. The `cold.allow_primary_domain: true` escape hatch exists but emits a warning at boot.
+- **Risk:** Broad operating modes add policy rules that conflict with host-specific sequence strategy. → **Mitigation:** DripDrop uses explicit step/adapter sending-rule flags instead of mode labels; the same adapter can serve different sequence steps with different unsubscribe, reply, verification, and daily-cap settings.
 - **Risk:** Floki-based HTML rewrite can mis-handle exotic markup (CDATA, conditional comments). → **Mitigation:** keep a documented allow-list of attributes (`href`, `src`) and bypass the rewrite for any URL inside `<style>`, `<script>`, or comments. Add property-based tests.
 - **Risk:** Cloak encryption with a single key in env var — key compromise is a full DB compromise. → **Mitigation:** documented rotation task; suggest sealed secrets / SOPS in deployment docs; never log decrypted values.
 - **Risk:** Tenant scoping is enforced in app code, not Postgres RLS. A bug in a query missing `tenant_key` could leak data. → **Mitigation:** every public API takes `tenant_key` explicitly; query helpers refuse to compile without a tenant clause when the called function is in the tenant-scoped set; add a property test that runs every public function and verifies no cross-tenant leakage.
@@ -141,7 +141,7 @@ This is the initial release — there is no prior schema to migrate from. The ho
 3. Run `mix pgflow.gen.job_migration DripDrop.Jobs.DispatchStep`.
 4. Run `mix dripdrop.setup` (creates the `dripdrop` schema and runs `V01`); accepts `--no-cron` to align with pgflow's posture and skip cron-tick wiring.
 5. Run `mix ecto.migrate`.
-6. Set `DRIPDROP_ENCRYPTION_KEY` (operator runs `mix dripdrop.gen.key` and stores the result in their secret manager).
+6. Set `DRIPDROP_ENCRYPTION_KEY` (operator generates a strong secret with host tooling such as `mix phx.gen.secret` and stores the result in their secret manager).
 7. Add a host-side PgFlow with `jobs: [DripDrop.Jobs.DispatchStep, DripDrop.Jobs.CronTick]`.
 8. Mount webhook routes via `DripDrop.Web.Router.dripdrop_webhooks/1`.
 9. Configure SPF/DKIM/DMARC for any sending domains; configure `unsubscribe_url_builder`.

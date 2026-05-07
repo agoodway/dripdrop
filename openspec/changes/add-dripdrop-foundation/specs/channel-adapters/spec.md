@@ -46,7 +46,7 @@ The library SHALL ship six channel modules conforming to `DripDrop.Channel`:
 
 - `DripDrop.Channels.Email` with built-in providers `mailgun`, `sendgrid`, `postmark`, `mailersend`, `ses`, `smtp`, `gmail` (Gmail API, single-mailbox), and `ms365` (Microsoft Graph `sendMail`, single-mailbox) — all delivered through `Swoosh` where a Swoosh adapter exists, otherwise direct via `Req`. The channel SHALL apply RFC 8058 headers when `messaging-policy` requires.
 - `DripDrop.Channels.SMS` (providers: `twilio`, `aws_sns`).
-- `DripDrop.Channels.Webhook` (no provider distinction; method, headers, body templated).
+- `DripDrop.Channels.Webhook` (no provider distinction; method, headers, body templated; outbound requests are signed with Standard Webhooks headers).
 - `DripDrop.Channels.PubSub` (broadcasts via `Phoenix.PubSub`).
 - `DripDrop.Channels.Slack` (provider: `webhook` for incoming webhook URLs).
 - `DripDrop.Channels.Telegram` (provider: `bot_api`).

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+pid=$(pgrep -f 'hivemind Procfile.dev' | head -1 || true)
+if [ -n "$pid" ]; then
+  kill -INT "$pid" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+fi
+
+pkill -f 'beam.*dripdrop_demo' 2>/dev/null || true
+docker compose stop >/dev/null 2>&1 || true
+
+echo "dripdrop: stopped"

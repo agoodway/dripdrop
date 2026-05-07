@@ -12,9 +12,9 @@ The repository SHALL contain a `demo/` Phoenix application directory at the repo
 - **WHEN** the library is packaged for Hex via `mix hex.build`
 - **THEN** the `demo/` directory is excluded from the package (declared via `package: [files: [...]]` in the library `mix.exs`).
 
-### Requirement: Top-Level Docker Image Bundles Postgres 17 With pgmq And pg_cron
+### Requirement: Top-Level Docker Image Bundles Postgres 18 With pgmq And pg_cron
 
-The repository root SHALL contain a `Dockerfile` and a `docker-compose.yml` that build a Postgres 17 image with `pgmq` v1.8.0 and `pg_cron` v1.6.4 pre-installed and pre-loaded via `shared_preload_libraries`. The setup SHALL mirror the pattern used by `pgflow` so that operators familiar with that project recognize it. The compose file SHALL expose a single service named `db`, set `cron.database_name` to the demo database name, and publish a stable host port for local development.
+The repository root SHALL contain a `Dockerfile` and a `docker-compose.yml` that build a Postgres 18 image with `pg_cron` preloaded via `shared_preload_libraries`. `pgmq` and `pgflow` SHALL be installed by PgFlow-generated migrations, mirroring the host-app setup path documented by PgFlow. The compose file SHALL expose a single service named `db`, set `cron.database_name` to the demo database name, and publish a stable host port for local development.
 
 #### Scenario: docker compose up brings up Postgres with extensions
 - **WHEN** an operator runs `docker compose up -d` from the repository root
@@ -78,7 +78,7 @@ The demo SHALL implement `mix demo.seed` (registered as `aliases: [seed: ["run p
 The demo's `Endpoint` SHALL mount `DripDrop.Web.Router.dripdrop_webhooks("/webhooks/dripdrop")` and `DripDrop.Web.UnsubscribePlug` at `/u/:token`. The demo SHALL configure `unsubscribe_url_builder` and `unsubscribe_secret` so RFC 8058 headers resolve to a working URL during local testing.
 
 #### Scenario: Local one-click unsubscribe round-trip
-- **WHEN** the demo sends a bulk-mode email through a local Mailgun sandbox and the operator clicks the List-Unsubscribe-Post link
+- **WHEN** the demo sends an email step with unsubscribe headers enabled through a local Mailgun sandbox and the operator clicks the List-Unsubscribe-Post link
 - **THEN** the demo's unsubscribe handler verifies the signed token, writes a `suppressions` row, and returns `200`.
 
 ### Requirement: Demo Mix File Defines A `mix quality` Alias

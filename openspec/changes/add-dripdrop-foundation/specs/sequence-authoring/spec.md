@@ -64,20 +64,28 @@ The system SHALL store `dripdrop.step_transitions` rows where `from_step_id` may
 - **WHEN** the engine evaluates a transition whose `to_step_id IS NULL` and whose conditions match
 - **THEN** the enclosing enrollment is marked `completed`.
 
-### Requirement: Conditions Reference Hooks, Enrollment Data, Events, Or Time Windows
+### Requirement: Conditions Reference Hooks, Enrollment Data, Events, Predicates, Or Time Windows
 
-The system SHALL store `dripdrop.conditions` rows attached to either a `step_id` (gating step execution) or a `transition_id` (gating a branch). Each condition SHALL declare a `condition_type` of `hook | enrollment_data | event | time_window`, an `operator` from `eq | neq | gt | lt | gte | lte | in | contains`, and the type-specific reference fields (`hook_function`, `http_hook_id`, `field_path`, `expected_value`, or `config`). Conditions whose operands cannot be coerced SHALL fail closed (the condition evaluates to `false`) and SHALL be logged via telemetry.
+The system SHALL store `dripdrop.conditions` rows attached to either a `step_id` (gating step execution) or a `transition_id` (gating a branch). Each condition SHALL declare a `condition_type` of `hook | enrollment_data | event | predicate | time_window`, and the type-specific reference fields (`hook_function`, `http_hook_id`, `field_path`, `expected_value`, or `config`).
+
+The `hook`, `enrollment_data`, `event`, and `time_window` types SHALL evaluate via a coercive comparator using an `operator` from `== | != | > | < | >= | <= | in | contains`. Equality and membership operators coerce both sides with `to_string/1`; the numeric operators coerce via `Float.parse/1`. Conditions whose operands cannot be coerced SHALL fail closed (evaluate to `false`) and SHALL be logged via telemetry.
+
+The `predicate` type SHALL evaluate via the Predicated DSL stored in `config["predicate"]`. The DSL uses the same operator vocabulary as the coercive comparator and supports `and`, `or`, and parenthesised grouping. Predicate evaluation is typed: literals must match the runtime value type. Predicate parse or evaluation errors SHALL fail closed and SHALL be logged via telemetry.
 
 #### Scenario: Hook-driven branch
-- **WHEN** a transition has a single `condition_type: "hook"`, `hook_function: "setup_completed"`, `operator: "eq"`, `expected_value: "false"` and the hook returns `{:ok, false}` for the enrollment
+- **WHEN** a transition has a single `condition_type: "hook"`, `hook_function: "setup_completed"`, `operator: "=="`, `expected_value: "false"` and the hook returns `{:ok, false}` for the enrollment
 - **THEN** the condition evaluates to `true` and the transition fires.
 
 #### Scenario: Enrollment-data JSONPath comparison
-- **WHEN** a condition has `condition_type: "enrollment_data"`, `field_path: "$.plan_tier"`, `operator: "eq"`, `expected_value: "enterprise"` and `enrollment.data` is `%{"plan_tier" => "enterprise"}`
+- **WHEN** a condition has `condition_type: "enrollment_data"`, `field_path: "$.plan_tier"`, `operator: "=="`, `expected_value: "enterprise"` and `enrollment.data` is `%{"plan_tier" => "enterprise"}`
 - **THEN** the condition evaluates to `true`.
 
+#### Scenario: Compound predicate with grouping
+- **WHEN** a condition has `condition_type: "predicate"` and `config["predicate"]` is `"(plan == 'pro' and trial_days_remaining > 0) or has_paid_invoice == true"`
+- **THEN** the predicate evaluates against the enrollment context and fires when either subexpression holds.
+
 #### Scenario: Coercion failure fails closed
-- **WHEN** an `operator: "gt"` is asked to compare `"abc"` to `10`
+- **WHEN** an `operator: ">"` is asked to compare `"abc"` to `10`
 - **THEN** the condition evaluates to `false` and emits a `[:dripdrop, :condition, :coercion_error]` telemetry event with the offending fields.
 
 ### Requirement: HTTP Hooks Are Owned By The `hooks` Capability But Are Selectable From Conditions And Templates

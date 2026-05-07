@@ -12,17 +12,17 @@ The system SHALL persist `dripdrop.suppressions` keyed uniquely on `(channel, re
 - **WHEN** an SMS execution targets `(555) 123-4567` and a suppression exists for `("sms", "+15551234567")`
 - **THEN** the normalized recipient matches and the send is skipped.
 
-### Requirement: Bulk Email Sends Apply RFC 8058 List-Unsubscribe Headers
+### Requirement: Email Steps May Opt Into RFC 8058 List-Unsubscribe Headers
 
-When the channel is `email` and the step's `config["operating_mode"]` is `bulk` (the default for sequenced lifecycle/marketing email), the system SHALL append two headers: `List-Unsubscribe: <https://...>, <mailto:unsubscribe@...>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The unsubscribe URL SHALL be tenant- and recipient-specific, signed, and resolvable via `DripDrop.Web.unsubscribe_handler/2`. DKIM signing of the outgoing email SHALL be required (verified via the configured Swoosh adapter or domain configuration); when DKIM is not configured the change SHALL fail at boot via `DripDrop.startup_check/0`.
+When the channel is `email` and the step sets `config["unsubscribe_headers"] == true` or `config["unsubscribe"] == true`, the system SHALL append two headers: `List-Unsubscribe: <https://...>, <mailto:unsubscribe@...>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The unsubscribe URL SHALL be tenant- and recipient-specific, signed, and resolvable via `DripDrop.Web.unsubscribe_handler/2`. When any configured step opts into unsubscribe headers, `DripDrop.startup_check/0` SHALL fail unless `unsubscribe_url_builder` is configured.
 
-#### Scenario: Bulk email gets headers
-- **WHEN** an email step has `operating_mode: "bulk"` and the host has configured `unsubscribe_url_builder`
+#### Scenario: Opted-in email gets headers
+- **WHEN** an email step has `unsubscribe_headers: true` and the host has configured `unsubscribe_url_builder`
 - **THEN** the outgoing `%Swoosh.Email{}` carries `List-Unsubscribe` and `List-Unsubscribe-Post` headers exactly as specified by RFC 8058.
 
-#### Scenario: Transactional email omits headers when explicit
-- **WHEN** the step is marked `operating_mode: "transactional"`
-- **THEN** the unsubscribe headers are NOT added; `messaging-policy` still consults the suppression list (manual/provider_block reasons), but `unsubscribe`-reason suppressions DO NOT block transactional sends.
+#### Scenario: Email without opt-in omits headers
+- **WHEN** an email step does not opt into unsubscribe headers
+- **THEN** the unsubscribe headers are NOT added.
 
 ### Requirement: Quiet Hours Are Enforced Against Recipient Local Time
 
@@ -32,8 +32,8 @@ When a step has `config["quiet_hours"]` set (or the global config is set), the s
 - **WHEN** an SMS execution claims at 22:30 local time and quiet hours are 21:00–08:00
 - **THEN** `scheduled_for` is set to 08:00 local on the next day, the execution transitions back to `scheduled`, and PgFlow re-enqueues for that time.
 
-#### Scenario: Quiet hours override per step
-- **WHEN** a step's `config["quiet_hours"]` is `false` (transactional override)
+#### Scenario: Quiet hours disabled per step
+- **WHEN** a step's `config["quiet_hours"]` is `false`
 - **THEN** the policy gate is bypassed for that step.
 
 ### Requirement: Rate Limits Are Enforced At Multiple Scopes
@@ -65,17 +65,17 @@ The system SHALL compute, per-`channel_adapter_id` over a rolling 30-day window:
 - **WHEN** a Mailgun adapter has 4 complaints out of 1000 sent in 30 days (0.4 %)
 - **THEN** the adapter's rate-limit gate engages a synthetic "paused" state preventing new claims, and operators see `complaint_threshold: 0.4` in telemetry.
 
-### Requirement: Cold-Outbound Operating Mode Adds Conservative Defaults
+### Requirement: Sending Rules Add Optional Per-Sender Controls
 
-When `step.config["operating_mode"] == "cold"`, the system SHALL apply: plain-text body required (HTML SHALL be rejected at validation), per-mailbox daily cap defaulting to 50/day for fresh adapters and configurable up to 500/day for warm adapters, sender-domain isolation check (the configured `from` SHALL not match the host's primary marketing domain unless `cold.allow_primary_domain: true`), and an explicit verified-recipient flag in `enrollment.data["recipient_verified_at"]` (otherwise the send is skipped with `reason: "unverified_recipient"`).
+When a step or adapter configures explicit sending rules, the system SHALL apply those rules without classifying the message into an operating mode. Supported rules include per-sender daily caps and `require_verified_recipient`. Daily caps are keyed by sender mailbox and defer to the next day boundary in the configured timezone. When `require_verified_recipient` is true and `enrollment.data["recipient_verified_at"]` is missing, dispatch SHALL skip with `reason: "unverified_recipient"`.
 
-#### Scenario: Cold step rejects HTML body
-- **WHEN** a step is created with `operating_mode: "cold"` and `body_format: "mjml"` or HTML
-- **THEN** authoring validation rejects the step with `{:error, [:cold_requires_plain_text]}`.
+#### Scenario: Verified-recipient requirement skips missing verification
+- **WHEN** a step has `require_verified_recipient: true` and the enrollment lacks `recipient_verified_at`
+- **THEN** dispatch skips the execution with `reason: "unverified_recipient"`.
 
-#### Scenario: Cold daily cap deferral
-- **WHEN** a cold adapter has already sent 50 messages in the current day and a 51st execution claims
-- **THEN** the execution defers to the next day boundary in the adapter's configured timezone and emits `[:dripdrop, :policy, :cold_cap]`.
+#### Scenario: Daily cap deferral
+- **WHEN** a sender mailbox has already reached its configured daily cap and the next execution claims
+- **THEN** the execution defers to the next day boundary in the configured timezone and emits `[:dripdrop, :policy, :daily_cap]`.
 
 ### Requirement: Audit Snapshot Is Persisted For Each Execution With Redaction
 

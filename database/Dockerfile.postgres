@@ -1,0 +1,14 @@
+# DripDrop development Postgres image
+# PostgreSQL 18 (native uuidv7() / RFC 9562) + pg_cron via PGDG apt.
+
+FROM postgres:18-bookworm
+
+ENV POSTGRES_PASSWORD=postgres
+
+# pg_cron 1.6.7 from the PGDG apt repo that postgres:18-bookworm already
+# trusts. No source build, no compiler toolchain in the image.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends postgresql-18-cron && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN echo "shared_preload_libraries = 'pg_cron'" >> /usr/share/postgresql/postgresql.conf.sample

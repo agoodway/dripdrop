@@ -1,8 +1,8 @@
 ## ADDED Requirements
 
-### Requirement: Default Template Engine For User-Authored Content Is Liquid (Solid)
+### Requirement: Default Template Engine For User-Authored Content Is Liquid (Liquex)
 
-The system SHALL render user-authored templates (step subjects, bodies, SMS content, webhook bodies, Slack/Telegram text, HTTP hook URLs and bodies) through `Solid` by default. EEx SHALL be reserved for templates whose source is a trusted Elixir module (`template_type: "module"`). Liquid templates SHALL run with strict-variable-error mode disabled (missing variables render as empty strings) so a misnamed variable does NOT crash dispatch.
+The system SHALL render user-authored templates (step subjects, bodies, SMS content, webhook bodies, Slack/Telegram text, HTTP hook URLs and bodies) through `Liquex` by default. EEx SHALL be reserved for templates whose source is a trusted Elixir module (`template_type: "module"`). Liquid templates SHALL render missing variables as empty strings while collecting missing-variable warnings so a misnamed variable does NOT crash dispatch.
 
 #### Scenario: Liquid render with enrollment variables
 - **WHEN** a step has `body: "Hi {{name}}!"` and the enrollment has `data: %{"name" => "Ada"}`

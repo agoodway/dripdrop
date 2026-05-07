@@ -2,11 +2,7 @@
 
 ### Requirement: Short-Link Adapter Behavior Defines A Uniform Provider Contract
 
-The system SHALL define `DripDrop.ShortLinks.Adapter` with `create_link(request :: %DripDrop.ShortLinks.Request{}, opts :: keyword()) :: {:ok, %DripDrop.ShortLinks.Result{}} | {:error, %{kind: :temporary | :permanent, reason: term()}}`. The library SHALL ship five built-in adapters: `Dub`, `GoodAnalytics`, `Module`, `Webhook`, and `None`.
-
-#### Scenario: Dub adapter returns short link
-- **WHEN** the configured adapter is `Dub` and `create_link/2` is called with a valid request
-- **THEN** the call posts to Dub's create-link API with `url`, `domain`, `externalId`, optional `key/prefix`, and returns `{:ok, %Result{short_url: "https://go.example.com/abc"}}`.
+The system SHALL define `DripDrop.ShortLinks.Adapter` with `create_link(request :: %DripDrop.ShortLinks.Request{}, opts :: keyword()) :: {:ok, %DripDrop.ShortLinks.Result{}} | {:error, %{kind: :temporary | :permanent, reason: term()}}`. The library SHALL ship four built-in adapters: `GoodAnalytics`, `Module`, `Webhook`, and `None`. Hosts wanting to integrate with hosted shortener APIs (e.g., Dub, Bitly, Rebrandly) configure `Webhook` against the provider's HTTP endpoint or write a small `Module` adapter — there is no built-in for any specific hosted shortener.
 
 #### Scenario: None adapter is a no-op
 - **WHEN** the configured adapter is `None` and short-linking is invoked
@@ -53,8 +49,8 @@ For HTML payloads, the system SHALL parse with an HTML parser (`Floki` or equiva
 The system SHALL resolve effective short-link configuration by merging in this order (later wins): global config from `config :dripdrop, short_links: [...]`, tenant config (when `tenant_key` matches), `sequence.metadata["short_links"]`, `step.config["short_links"]`. The merged config SHALL include `enabled`, `provider`, `domain`, `track_conversion`, `tag_names`, `external_id_strategy`, `utm_source/medium/campaign/content`, `exclude_patterns`, `on_error` (`:fail | :send_originals`).
 
 #### Scenario: Step-level override
-- **WHEN** the global config sets `provider: "dub"` but a step sets `config["short_links"]["provider"]: "good_analytics"`
-- **THEN** that step uses the GoodAnalytics provider while the rest of the sequence uses Dub.
+- **WHEN** the global config sets `provider: "webhook"` but a step sets `config["short_links"]["provider"]: "good_analytics"`
+- **THEN** that step uses the GoodAnalytics provider while the rest of the sequence uses the webhook provider.
 
 ### Requirement: GoodAnalytics Provider Maps Onto Its Library API When In-Process
 

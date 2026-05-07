@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+iex --sname "debug_$$" --cookie dripdrop_demo_dev --remsh "dripdrop_demo@$(hostname -s)"
