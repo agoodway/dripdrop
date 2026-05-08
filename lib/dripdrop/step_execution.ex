@@ -31,6 +31,7 @@ defmodule DripDrop.StepExecution do
     field(:payload, :map)
     field(:response, :map)
     field(:provider_message_id, :string)
+    field(:out_message_id, :string)
     field(:error_message, :string)
     field(:metadata, :map, default: %{})
 
@@ -65,6 +66,7 @@ defmodule DripDrop.StepExecution do
       :payload,
       :response,
       :provider_message_id,
+      :out_message_id,
       :error_message,
       :metadata
     ])

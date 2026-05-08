@@ -29,6 +29,19 @@ defmodule DripDrop.ChannelAdapter do
     field(:is_default, :boolean, default: false)
     field(:active, :boolean, default: true)
 
+    field(:health_state, Ecto.Enum,
+      values: [active: "active", resting: "resting", probing: "probing", ramping: "ramping"]
+    )
+
+    field(:health_score, :decimal)
+    field(:resting_until, :utc_datetime)
+    field(:last_send_at, :utc_datetime)
+    field(:daily_cap, :integer)
+    field(:ramp_started_at, :utc_datetime)
+    field(:ramp_increment, :integer)
+    field(:ramp_floor, :integer)
+    field(:min_gap_seconds, :integer)
+
     timestamps(type: :utc_datetime)
   end
 
@@ -46,9 +59,23 @@ defmodule DripDrop.ChannelAdapter do
       :credentials,
       :config,
       :is_default,
-      :active
+      :active,
+      :health_state,
+      :health_score,
+      :resting_until,
+      :last_send_at,
+      :daily_cap,
+      :ramp_started_at,
+      :ramp_increment,
+      :ramp_floor,
+      :min_gap_seconds
     ])
     |> validate_required([:name, :channel, :provider])
+    |> validate_number(:health_score, greater_than_or_equal_to: 0, less_than_or_equal_to: 1)
+    |> validate_number(:daily_cap, greater_than: 0)
+    |> validate_number(:ramp_increment, greater_than: 0)
+    |> validate_number(:ramp_floor, greater_than_or_equal_to: 0)
+    |> validate_number(:min_gap_seconds, greater_than_or_equal_to: 0)
     |> validate_channel()
     |> validate_provider()
     |> validate_credentials()

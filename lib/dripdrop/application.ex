@@ -14,6 +14,7 @@ defmodule DripDrop.Application do
       [
         vault_child(),
         DripDrop.Cache,
+        DripDrop.AdapterPools.WDRR,
         {Registry, keys: :unique, name: ShortLinks.Registry},
         {Task.Supervisor, name: DripDrop.TaskSupervisor},
         threshold_child(),

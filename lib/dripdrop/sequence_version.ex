@@ -14,11 +14,19 @@ defmodule DripDrop.SequenceVersion do
   @schema_prefix "dripdrop"
   @states ~w(draft active archived)
 
+  @type t :: %__MODULE__{}
+
   schema "sequence_versions" do
     field(:tenant_key, :string)
     field(:version, :integer)
     field(:name, :string)
     field(:state, :string, default: "draft")
+
+    field(:mode, Ecto.Enum,
+      values: [lifecycle: "lifecycle", outbound: "outbound"],
+      default: :lifecycle
+    )
+
     field(:config, :map, default: %{})
     field(:published_at, :utc_datetime)
 
@@ -35,10 +43,20 @@ defmodule DripDrop.SequenceVersion do
   @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
   def changeset(version, attrs) do
     version
-    |> cast(attrs, [:sequence_id, :tenant_key, :version, :name, :state, :config, :published_at])
+    |> cast(attrs, [
+      :sequence_id,
+      :tenant_key,
+      :version,
+      :name,
+      :state,
+      :mode,
+      :config,
+      :published_at
+    ])
     |> validate_required([:sequence_id, :version])
     |> validate_number(:version, greater_than: 0)
     |> validate_inclusion(:state, @states)
+    |> validate_mode_immutable_after_publish()
     |> unique_constraint(:version, name: :sequence_versions_sequence_version_idx)
     |> unique_constraint(:state, name: :sequence_versions_one_active_idx)
     |> foreign_key_constraint(:sequence_id)
@@ -59,4 +77,13 @@ defmodule DripDrop.SequenceVersion do
   """
   @spec archive_changeset(Ecto.Schema.t()) :: Ecto.Changeset.t()
   def archive_changeset(version), do: change(version, state: "archived")
+
+  defp validate_mode_immutable_after_publish(changeset) do
+    if changeset.data.__meta__.state == :loaded and get_field(changeset, :state) == "active" and
+         changed?(changeset, :mode) do
+      add_error(changeset, :mode, "mode_immutable_after_publish")
+    else
+      changeset
+    end
+  end
 end

@@ -10,6 +10,7 @@ defmodule DripDrop.Ingest do
   import Ecto.Query
 
   alias DripDrop.{Clock, MessageEvent, OnReply, Redact, Repo, StepExecution, Suppressions}
+  alias DripDrop.Ingest.Correlation
   alias Ecto.Multi
 
   @doc """
@@ -49,6 +50,7 @@ defmodule DripDrop.Ingest do
   defp event_attrs(normalized) do
     %{
       step_execution_id: normalized.step_execution_id,
+      adapter_id: adapter_id_for(normalized),
       tenant_key: normalized.tenant_key,
       channel: normalized.channel,
       provider: normalized.provider,
@@ -56,8 +58,22 @@ defmodule DripDrop.Ingest do
       provider_event_id: normalized.provider_event_id,
       event_type: normalized.event_type,
       event_data: Redact.scrub(normalized.event_data),
+      in_reply_to: normalized[:in_reply_to],
+      references_list: normalized[:references_list],
       occurred_at: normalized.occurred_at || Clock.now()
     }
+  end
+
+  defp adapter_id_for(%{step_execution_id: nil}), do: nil
+
+  defp adapter_id_for(%{step_execution_id: step_execution_id}) do
+    case Repo.get(StepExecution, step_execution_id) do
+      %StepExecution{metadata: %{"adapter_id" => adapter_id}} when is_binary(adapter_id) ->
+        adapter_id
+
+      _execution ->
+        nil
+    end
   end
 
   defp maybe_suppress(multi, %{event_type: "bounced", severity: "permanent"} = normalized),
@@ -111,16 +127,10 @@ defmodule DripDrop.Ingest do
     )
   end
 
-  defp attach_execution(%{provider_message_id: nil} = normalized), do: {:ok, normalized}
-
   defp attach_execution(normalized) do
-    StepExecution
-    |> where([execution], execution.provider_message_id == ^normalized.provider_message_id)
-    |> where([execution], execution.channel == ^normalized.channel)
-    |> where_tenant_match(normalized.tenant_key)
-    |> order_by([execution], desc: execution.inserted_at)
-    |> limit(1)
-    |> Repo.one()
+    normalized
+    |> execution_by_message_id()
+    |> Kernel.||(Correlation.by_provider_message_id(normalized))
     |> case do
       nil ->
         emit_unmatched(normalized)
@@ -136,11 +146,12 @@ defmodule DripDrop.Ingest do
     end
   end
 
-  defp where_tenant_match(query, nil),
-    do: where(query, [execution], is_nil(execution.tenant_key))
+  defp execution_by_message_id(%{in_reply_to: in_reply_to} = normalized)
+       when is_binary(in_reply_to) do
+    Correlation.by_out_message_id(normalized, [in_reply_to])
+  end
 
-  defp where_tenant_match(query, tenant_key),
-    do: where(query, [execution], execution.tenant_key == ^tenant_key)
+  defp execution_by_message_id(_normalized), do: nil
 
   defp emit_unmatched(normalized) do
     :telemetry.execute([:dripdrop, :ingest, :unmatched_event], %{count: 1}, %{
@@ -171,6 +182,8 @@ defmodule DripDrop.Ingest do
        event_type: event_type(event["event"]),
        provider_event_id: event["id"],
        provider_message_id: headers["message-id"],
+       in_reply_to: header(headers, "in-reply-to"),
+       references_list: references(headers),
        recipient: event["recipient"],
        occurred_at: timestamp(event["timestamp"]),
        severity: bounce_severity(event),
@@ -191,6 +204,8 @@ defmodule DripDrop.Ingest do
        event_type: event_type(event["event"]),
        provider_event_id: event["sg_event_id"],
        provider_message_id: event["sg_message_id"] || event["smtp-id"],
+       in_reply_to: header(event, "in-reply-to"),
+       references_list: references(event),
        recipient: event["email"],
        occurred_at: timestamp(event["timestamp"]),
        severity: sendgrid_bounce_severity(event),
@@ -206,6 +221,8 @@ defmodule DripDrop.Ingest do
        event_type: postmark_event_type(event["RecordType"]),
        provider_event_id: event["MessageID"],
        provider_message_id: event["MessageID"],
+       in_reply_to: header(event["Headers"] || event["headers"] || event, "in-reply-to"),
+       references_list: references(event["Headers"] || event["headers"] || event),
        recipient: event["Recipient"] || event["Email"],
        occurred_at: timestamp(event["DeliveredAt"] || event["ReceivedAt"]),
        severity: postmark_bounce_severity(event),
@@ -222,6 +239,8 @@ defmodule DripDrop.Ingest do
        event_type: event_type(data["type"] || event["type"]),
        provider_event_id: data["id"],
        provider_message_id: data["message_id"],
+       in_reply_to: header(data["headers"] || event["headers"] || data, "in-reply-to"),
+       references_list: references(data["headers"] || event["headers"] || data),
        recipient: data["email"],
        occurred_at: timestamp(event["created_at"]),
        severity: nil,
@@ -240,6 +259,8 @@ defmodule DripDrop.Ingest do
        event_type: event_type,
        provider_event_id: envelope["MessageId"],
        provider_message_id: mail["messageId"],
+       in_reply_to: header(mail["headers"] || mail, "in-reply-to"),
+       references_list: references(mail["headers"] || mail),
        recipient: recipient,
        occurred_at: timestamp(envelope["Timestamp"]),
        severity: severity,
@@ -265,12 +286,58 @@ defmodule DripDrop.Ingest do
   defp normalize(adapter, _request), do: {:error, {:unsupported_provider, adapter.provider}}
 
   defp base(adapter, _request, attrs) do
-    Map.merge(attrs, %{
+    %{
       step_execution_id: nil,
       tenant_key: adapter.tenant_key,
       channel: adapter.channel,
-      provider: adapter.provider
-    })
+      provider: adapter.provider,
+      in_reply_to: nil,
+      references_list: []
+    }
+    |> Map.merge(attrs)
+  end
+
+  defp header(headers, name) when is_map(headers) do
+    Enum.find_value(headers, fn {key, value} ->
+      if normalize_header_name(key) == name, do: value
+    end)
+  end
+
+  defp header(headers, name) when is_list(headers) do
+    Enum.find_value(headers, fn
+      %{"name" => key, "value" => value} ->
+        if normalize_header_name(key) == name, do: value
+
+      %{"Name" => key, "Value" => value} ->
+        if normalize_header_name(key) == name, do: value
+
+      %{name: key, value: value} ->
+        if normalize_header_name(key) == name, do: value
+
+      {key, value} ->
+        if normalize_header_name(key) == name, do: value
+
+      _header ->
+        nil
+    end)
+  end
+
+  defp header(_headers, _name), do: nil
+
+  defp references(headers) do
+    headers
+    |> header("references")
+    |> case do
+      value when is_binary(value) -> String.split(value, ~r/\s+/, trim: true)
+      values when is_list(values) -> Enum.map(values, &to_string/1)
+      _value -> []
+    end
+  end
+
+  defp normalize_header_name(name) do
+    name
+    |> to_string()
+    |> String.downcase()
   end
 
   defp body(%{body_params: body}) when is_map(body), do: body

@@ -76,6 +76,20 @@ mix ecto.migrate
 Use `mix dripdrop.check_schema` in CI or deploy checks to verify the installed
 schema version matches the library.
 
+## Cold Outbound
+
+Cold outbound is optional. No extra migration is required beyond the current V01
+schema. Hosts that enable outbound mode should:
+
+1. Create mailbox or ESP adapters with health/ramp fields.
+2. Create an adapter pool and add pool members.
+3. Set `sequence_versions.mode = "outbound"` and `config["pool_id"]` on the
+   outbound version.
+4. Pump inbound mailbox replies from host-owned IMAP, Microsoft Graph, or Gmail
+   infrastructure into `DripDrop.ingest_inbound_message/2`.
+
+See [`cold_outbound.md`](cold_outbound.md) for the full operator guide.
+
 ## Webhooks
 
 In a Phoenix router:

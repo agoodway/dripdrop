@@ -6,6 +6,7 @@ defmodule DripDrop.DispatchExecutionTest do
   alias DripDrop.Channels.Provider
 
   alias DripDrop.{
+    ChannelAdapter,
     Dispatch,
     Enrollment,
     Fixtures,
@@ -103,7 +104,7 @@ defmodule DripDrop.DispatchExecutionTest do
 
   describe "dispatch worker" do
     test "only one competing worker sends a scheduled execution", %{recorder: recorder} do
-      %{execution: execution} = dispatch_context(recorder)
+      %{adapter: adapter, execution: execution} = dispatch_context(recorder)
 
       results =
         1..2
@@ -114,6 +115,7 @@ defmodule DripDrop.DispatchExecutionTest do
 
       assert Enum.sort(results) == [:ok, :ok]
       assert TestRepo.get!(StepExecution, execution.id).state == "sent"
+      assert %DateTime{} = TestRepo.get!(ChannelAdapter, adapter.id).last_send_at
       assert delivery_count(recorder) == 1
     end
 
@@ -361,6 +363,357 @@ defmodule DripDrop.DispatchExecutionTest do
                )
              )
     end
+
+    test "lifecycle dispatch ignores outbound-only health and min-gap columns", %{
+      recorder: recorder
+    } do
+      %{execution: execution} =
+        dispatch_context(recorder,
+          adapter_attrs: %{
+            health_state: :resting,
+            resting_until: DateTime.add(DateTime.utc_now(:second), 3600, :second),
+            last_send_at: DateTime.utc_now(:second),
+            min_gap_seconds: 90
+          }
+        )
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+      assert TestRepo.get!(StepExecution, execution.id).state == "sent"
+      assert delivery_count(recorder) == 1
+    end
+
+    test "lifecycle dispatch omits threading headers by default", %{recorder: recorder} do
+      %{execution: execution} = dispatch_context(recorder)
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert [delivery] = deliveries(recorder)
+      refute Map.has_key?(delivery.headers, "Message-ID")
+      assert is_nil(TestRepo.get!(StepExecution, execution.id).out_message_id)
+    end
+
+    test "lifecycle dispatch can opt into thread continuity", %{recorder: recorder} do
+      %{enrollment: enrollment, execution: execution, step: step, version: version} =
+        dispatch_context(recorder,
+          step_config: %{"quiet_hours" => false, "thread_continuity" => true}
+        )
+
+      previous_step = Fixtures.step_fixture(version, %{key: "previous", position: 0})
+
+      Fixtures.step_execution_fixture(enrollment, previous_step)
+      |> mark_sent("<prior-lifecycle@example.com>")
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert [delivery] = deliveries(recorder)
+      assert delivery.headers["In-Reply-To"] == "<prior-lifecycle@example.com>"
+      assert delivery.headers["References"] == "<prior-lifecycle@example.com>"
+
+      assert TestRepo.get!(StepExecution, execution.id).out_message_id ==
+               delivery.headers["Message-ID"]
+
+      assert step.config["thread_continuity"] == true
+    end
+
+    test "outbound dispatch uses the pinned adapter instead of the default", %{recorder: recorder} do
+      %{adapter: adapter, execution: execution} = outbound_dispatch_context(recorder)
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert delivery_count(recorder) == 1
+      assert [delivery] = deliveries(recorder)
+      assert %{"Message-ID" => message_id} = delivery.headers
+      assert message_id =~ ~r/^<.+@example\.com>$/
+      assert TestRepo.get!(StepExecution, execution.id).out_message_id == message_id
+
+      assert TestRepo.exists?(
+               from(event in MessageEvent,
+                 where: event.step_execution_id == ^execution.id,
+                 where: event.event_type == "sent",
+                 where: fragment("?->>'adapter_id'", event.event_data) == ^adapter.id
+               )
+             )
+    end
+
+    test "outbound follow-up stamps In-Reply-To and References", %{recorder: recorder} do
+      %{enrollment: enrollment, execution: execution, version: version} =
+        outbound_dispatch_context(recorder)
+
+      previous_step = Fixtures.step_fixture(version, %{key: "previous", position: 0})
+
+      previous_execution =
+        Fixtures.step_execution_fixture(enrollment, previous_step)
+        |> mark_sent("<prior@example.com>")
+
+      assert previous_execution.out_message_id == "<prior@example.com>"
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert [delivery] = deliveries(recorder)
+      assert delivery.headers["In-Reply-To"] == "<prior@example.com>"
+      assert delivery.headers["References"] == "<prior@example.com>"
+      assert delivery.headers["Message-ID"] != "<prior@example.com>"
+    end
+
+    test "outbound adapter override starts a new thread", %{recorder: recorder} do
+      %{enrollment: enrollment, execution: execution, step: step, version: version} =
+        outbound_dispatch_context(recorder)
+
+      previous_step = Fixtures.step_fixture(version, %{key: "previous", position: 0})
+
+      Fixtures.step_execution_fixture(enrollment, previous_step)
+      |> mark_sent("<prior@example.com>")
+
+      override =
+        Fixtures.channel_adapter_fixture(%{
+          tenant_key: enrollment.tenant_key,
+          provider: "dispatch_recorder",
+          config: %{"recorder" => recorder}
+        })
+
+      step
+      |> DripDrop.Step.changeset(%{adapter_override_id: override.id})
+      |> TestRepo.update!()
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert [delivery] = deliveries(recorder)
+      assert Map.has_key?(delivery.headers, "Message-ID")
+      refute Map.has_key?(delivery.headers, "In-Reply-To")
+      refute Map.has_key?(delivery.headers, "References")
+    end
+
+    test "outbound dispatch fails when the enrollment has no pin", %{recorder: recorder} do
+      %{enrollment: enrollment, execution: execution} = outbound_dispatch_context(recorder)
+
+      enrollment
+      |> Enrollment.changeset(%{adapter_id: nil})
+      |> TestRepo.update!()
+
+      assert {:error, %{kind: :permanent, reason: :no_outbound_pin}} =
+               DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.state == "failed"
+      assert delivery_count(recorder) == 0
+    end
+
+    test "outbound ramp cap defers when the adapter has reached today's cap", %{
+      recorder: recorder
+    } do
+      attach_telemetry([:dripdrop, :policy, :ramp_cap])
+
+      %{adapter: adapter, execution: execution} =
+        outbound_dispatch_context(recorder, adapter_attrs: %{daily_cap: 1})
+
+      Fixtures.message_event_fixture(%{
+        tenant_key: execution.tenant_key,
+        step_execution_id: execution.id,
+        adapter_id: adapter.id,
+        event_data: %{"adapter_id" => adapter.id}
+      })
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.state == "scheduled"
+      assert DateTime.compare(reloaded.scheduled_for, execution.scheduled_for) == :gt
+      assert delivery_count(recorder) == 0
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :ramp_cap], %{count: 1},
+                      %{adapter_id: adapter_id, sent_count: 1, cap: 1}}
+
+      assert adapter_id == adapter.id
+    end
+
+    test "outbound sub-cap defers when a sequence exhausts its adapter share", %{
+      recorder: recorder
+    } do
+      attach_telemetry([:dripdrop, :policy, :sub_cap])
+
+      %{
+        adapter: adapter,
+        enrollment: enrollment,
+        execution: execution,
+        step: step,
+        version: version
+      } =
+        outbound_dispatch_context(recorder, adapter_attrs: %{daily_cap: 10})
+
+      Fixtures.adapter_sequence_budget_fixture(adapter, version, %{max_share_pct: 50})
+
+      for _index <- 1..5 do
+        sent_execution =
+          Fixtures.step_execution_fixture(enrollment, step, %{
+            executed_at: DateTime.utc_now(:second)
+          })
+          |> StepExecution.changeset(%{state: "claiming"})
+          |> TestRepo.update!()
+          |> StepExecution.changeset(%{state: "sending"})
+          |> TestRepo.update!()
+          |> StepExecution.changeset(%{state: "sent"})
+          |> TestRepo.update!()
+
+        Fixtures.message_event_fixture(%{
+          tenant_key: execution.tenant_key,
+          step_execution_id: sent_execution.id,
+          adapter_id: adapter.id,
+          event_data: %{"adapter_id" => adapter.id}
+        })
+      end
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      assert TestRepo.get!(StepExecution, execution.id).state == "scheduled"
+      assert delivery_count(recorder) == 0
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :sub_cap], %{count: 1},
+                      %{adapter_id: adapter_id, sent_count: 5, cap: 5}}
+
+      assert adapter_id == adapter.id
+    end
+
+    test "outbound min-gap defers until the pinned adapter gap elapses", %{recorder: recorder} do
+      attach_telemetry([:dripdrop, :policy, :min_gap])
+
+      last_send_at = DateTime.utc_now(:second)
+
+      %{adapter: adapter, execution: execution} =
+        outbound_dispatch_context(recorder,
+          adapter_attrs: %{last_send_at: last_send_at, min_gap_seconds: 90}
+        )
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.state == "scheduled"
+
+      assert DateTime.compare(reloaded.scheduled_for, DateTime.add(last_send_at, 89, :second)) ==
+               :gt
+
+      assert delivery_count(recorder) == 0
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :min_gap], %{count: 1},
+                      %{adapter_id: adapter_id, min_gap_seconds: 90}}
+
+      assert adapter_id == adapter.id
+    end
+
+    test "outbound pause policy pauses when the pinned adapter is terminally unavailable", %{
+      recorder: recorder
+    } do
+      resting_until = DateTime.utc_now(:second) |> DateTime.add(8 * 86_400, :second)
+
+      %{adapter: adapter, enrollment: enrollment, execution: execution} =
+        outbound_dispatch_context(recorder,
+          adapter_attrs: %{health_state: :resting, resting_until: resting_until}
+        )
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(Enrollment, enrollment.id)
+      assert reloaded.state == "paused"
+      assert reloaded.metadata["pause_reason"] == "pinned_adapter_unavailable"
+      assert reloaded.metadata["paused_adapter_id"] == adapter.id
+      assert TestRepo.get!(StepExecution, execution.id).state == "scheduled"
+    end
+
+    test "outbound auto-rebind defers when every pool member is unhealthy", %{recorder: recorder} do
+      resting_until = DateTime.utc_now(:second) |> DateTime.add(8 * 86_400, :second)
+
+      %{enrollment: enrollment, execution: execution, pool: pool} =
+        outbound_dispatch_context(recorder,
+          pool_attrs: %{on_pin_unavailable: :reassign},
+          adapter_attrs: %{health_state: :resting, resting_until: resting_until}
+        )
+
+      backup =
+        Fixtures.channel_adapter_fixture(%{
+          tenant_key: enrollment.tenant_key,
+          name: "Backup",
+          provider: "dispatch_recorder",
+          config: %{"recorder" => recorder},
+          health_state: :resting,
+          resting_until: resting_until
+        })
+
+      Fixtures.adapter_pool_member_fixture(pool, backup)
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.state == "scheduled"
+      assert TestRepo.get!(Enrollment, enrollment.id).state == "active"
+      assert delivery_count(recorder) == 0
+    end
+
+    test "outbound paused_until in adapter config defers dispatch with adapter_paused reason", %{
+      recorder: recorder
+    } do
+      attach_telemetry([:dripdrop, :policy, :adapter_paused])
+
+      paused_until = DateTime.add(DateTime.utc_now(:second), 3600, :second)
+      paused_until_iso = DateTime.to_iso8601(paused_until)
+
+      %{adapter: adapter, execution: execution} =
+        outbound_dispatch_context(recorder,
+          adapter_attrs: %{
+            config: %{
+              "recorder" => recorder,
+              "paused_until" => paused_until_iso,
+              "paused_reason" => "complaint_threshold"
+            }
+          }
+        )
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.state == "scheduled"
+      assert delivery_count(recorder) == 0
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :adapter_paused], %{count: 1},
+                      %{adapter_id: adapter_id, paused_reason: "complaint_threshold"}}
+
+      assert adapter_id == adapter.id
+    end
+
+    test "outbound auto-rebind picks a healthy pool member when the pin is resting", %{
+      recorder: recorder
+    } do
+      attach_telemetry([:dripdrop, :enrollment, :sender_rebound])
+
+      resting_until = DateTime.utc_now(:second) |> DateTime.add(8 * 86_400, :second)
+
+      %{adapter: original, enrollment: enrollment, execution: execution, pool: pool} =
+        outbound_dispatch_context(recorder,
+          pool_attrs: %{on_pin_unavailable: :reassign},
+          adapter_attrs: %{health_state: :resting, resting_until: resting_until}
+        )
+
+      healthy =
+        Fixtures.channel_adapter_fixture(%{
+          tenant_key: enrollment.tenant_key,
+          name: "Healthy-Backup",
+          provider: "dispatch_recorder",
+          config: %{"recorder" => recorder},
+          health_state: :active
+        })
+
+      Fixtures.adapter_pool_member_fixture(pool, healthy)
+
+      assert :ok = DispatchStep.perform(%{step_execution_id: execution.id})
+
+      reloaded_enrollment = TestRepo.get!(Enrollment, enrollment.id)
+      assert reloaded_enrollment.adapter_id == healthy.id
+      assert TestRepo.get!(StepExecution, execution.id).state == "sent"
+
+      assert_receive {:telemetry, [:dripdrop, :enrollment, :sender_rebound], %{count: 1},
+                      %{old_adapter_id: old_id, new_adapter_id: new_id}}
+
+      assert old_id == original.id
+      assert new_id == healthy.id
+    end
   end
 
   defp dispatch_context(recorder, opts \\ []) do
@@ -375,12 +728,15 @@ defmodule DripDrop.DispatchExecutionTest do
         template_content: %{"subject" => "Welcome", "text" => "Hello {{ subscriber_id }}"}
       })
 
-    Fixtures.channel_adapter_fixture(%{
-      tenant_key: sequence.tenant_key,
-      provider: "dispatch_recorder",
-      is_default: true,
-      config: Map.put(Keyword.get(opts, :adapter_config, %{}), "recorder", recorder)
-    })
+    adapter =
+      %{
+        tenant_key: sequence.tenant_key,
+        provider: "dispatch_recorder",
+        is_default: true,
+        config: Map.put(Keyword.get(opts, :adapter_config, %{}), "recorder", recorder)
+      }
+      |> Map.merge(Keyword.get(opts, :adapter_attrs, %{}))
+      |> Fixtures.channel_adapter_fixture()
 
     enrollment =
       Fixtures.enrollment_fixture(
@@ -406,6 +762,79 @@ defmodule DripDrop.DispatchExecutionTest do
       sequence: sequence,
       version: version,
       step: step,
+      adapter: adapter,
+      enrollment: enrollment,
+      execution: execution
+    }
+  end
+
+  defp outbound_dispatch_context(recorder, opts \\ []) do
+    sequence = Fixtures.sequence_fixture()
+
+    pool_attrs =
+      Map.merge(%{tenant_key: sequence.tenant_key}, Keyword.get(opts, :pool_attrs, %{}))
+
+    pool = Fixtures.adapter_pool_fixture(pool_attrs)
+
+    adapter_attrs =
+      %{
+        tenant_key: sequence.tenant_key,
+        provider: "dispatch_recorder",
+        is_default: false,
+        config: %{"recorder" => recorder},
+        health_state: :active
+      }
+      |> Map.merge(Keyword.get(opts, :adapter_attrs, %{}))
+
+    adapter = Fixtures.channel_adapter_fixture(adapter_attrs)
+
+    _default =
+      Fixtures.channel_adapter_fixture(%{tenant_key: sequence.tenant_key, is_default: true})
+
+    _member = Fixtures.adapter_pool_member_fixture(pool, adapter)
+
+    version =
+      Fixtures.sequence_version_fixture(sequence, %{
+        state: "active",
+        mode: :outbound,
+        config: %{"pool_id" => pool.id}
+      })
+
+    step =
+      Fixtures.step_fixture(version, %{
+        key: "current",
+        position: 1,
+        config: %{"quiet_hours" => false},
+        template_content: %{
+          "subject" => "Welcome",
+          "text" => "Hello {{ subscriber_id }}",
+          "from" => "sender@example.com"
+        }
+      })
+
+    enrollment =
+      Fixtures.enrollment_fixture(
+        sequence,
+        version,
+        %{
+          data: %{"email" => "ada@example.com"},
+          adapter_id: adapter.id,
+          effective_mode: :outbound
+        }
+      )
+
+    execution =
+      Fixtures.step_execution_fixture(enrollment, step, %{
+        recipient: enrollment.data["email"],
+        idempotency_key: "idem-#{System.unique_integer([:positive])}"
+      })
+
+    %{
+      sequence: sequence,
+      version: version,
+      pool: pool,
+      step: step,
+      adapter: adapter,
       enrollment: enrollment,
       execution: execution
     }
@@ -413,6 +842,20 @@ defmodule DripDrop.DispatchExecutionTest do
 
   defp deliveries(recorder), do: Agent.get({:global, recorder}, & &1)
   defp delivery_count(recorder), do: recorder |> deliveries() |> length()
+
+  defp mark_sent(execution, out_message_id) do
+    execution
+    |> StepExecution.changeset(%{state: "claiming"})
+    |> TestRepo.update!()
+    |> StepExecution.changeset(%{state: "sending"})
+    |> TestRepo.update!()
+    |> StepExecution.changeset(%{
+      state: "sent",
+      executed_at: DateTime.add(DateTime.utc_now(:second), -60, :second),
+      out_message_id: out_message_id
+    })
+    |> TestRepo.update!()
+  end
 
   defp attach_telemetry(event) do
     parent = self()

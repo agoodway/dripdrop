@@ -65,6 +65,60 @@ The callbacks are `schedule(execution, scheduled_for)` and `cancel(job_id)`.
 Schedulers should enqueue durable work from the `StepExecution` record rather
 than embedding rendered payloads.
 
+## Cold Outbound Extension Points
+
+### Pool Allocators
+
+DripDrop currently ships one allocator: `DripDrop.AdapterPools.WDRR`. It stores
+deficit counters in ETS and reads pool membership, health, and cap data from the
+database. A future custom allocator should keep the same contract:
+
+```elixir
+pick_member(pool, sequence_version) ::
+  {:ok, %DripDrop.AdapterPoolMember{}} | {:error, :pool_exhausted}
+```
+
+Allocator output must be tenant-safe, return only active pool members, and leave
+existing enrollment pins untouched.
+
+### External Health Signals
+
+Hosts that run inbox-placement checks, seed tests, or provider reputation
+monitors can feed structured results into DripDrop:
+
+```elixir
+DripDrop.set_adapter_health(adapter.id, %{
+  health_state: :resting,
+  health_score: 0.42,
+  source: :postmaster_tools
+})
+```
+
+The call updates `channel_adapters.health_state`, emits health telemetry, and is
+used by outbound pool selection and dispatch gates. Lifecycle sequences ignore
+these fields.
+
+### Host Inbox Infrastructure
+
+DripDrop does not ship an IMAP, Microsoft Graph, or Gmail poller. Hosts that
+already receive mailbox events should normalize the message and call:
+
+```elixir
+DripDrop.ingest_inbound_message(adapter.id, %{
+  message_id: "reply@example.net",
+  in_reply_to: "019e...@example.com",
+  references: ["019e...@example.com"],
+  from: "prospect@example.org",
+  to: "sales@example.com",
+  body_text: "Interested",
+  received_at: DateTime.utc_now(),
+  intent: :reply
+})
+```
+
+Correlation prefers `in_reply_to` against `step_executions.out_message_id`, then
+falls back to provider ids when supplied in headers.
+
 ## Custom Hook Module
 
 Sequence hooks call a host module through `DripDrop.HookBehavior`:

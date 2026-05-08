@@ -568,6 +568,8 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       assert_in_delta rate, 0.004, 0.00001
 
       adapter = TestRepo.get!(ChannelAdapter, adapter.id)
+      assert adapter.health_state == :resting
+      assert %DateTime{} = adapter.resting_until
       assert adapter.config["paused_reason"] == "complaint_threshold"
       assert is_binary(adapter.config["paused_until"])
     end
@@ -589,6 +591,7 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       assert_in_delta rate, 0.02, 0.00001
 
       adapter = TestRepo.get!(ChannelAdapter, adapter.id)
+      assert adapter.health_state == :resting
       assert adapter.config["paused_reason"] == "bounce_threshold"
     end
 

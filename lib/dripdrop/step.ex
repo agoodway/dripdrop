@@ -31,6 +31,7 @@ defmodule DripDrop.Step do
 
     belongs_to(:sequence_version, SequenceVersion)
     belongs_to(:channel_adapter, ChannelAdapter)
+    belongs_to(:adapter_override, ChannelAdapter)
     has_many(:conditions, Condition)
 
     timestamps(type: :utc_datetime)
@@ -54,6 +55,7 @@ defmodule DripDrop.Step do
       :template_module,
       :template_function,
       :channel_adapter_id,
+      :adapter_override_id,
       :config,
       :active
     ])
@@ -61,9 +63,19 @@ defmodule DripDrop.Step do
     |> validate_required([:sequence_version_id, :name, :key, :channel])
     |> validate_inclusion(:channel, @channels)
     |> validate_inclusion(:template_type, @template_types)
+    |> validate_adapter_override_conflict()
     |> unique_constraint(:key, name: :steps_version_key_idx)
     |> unique_constraint(:position, name: :steps_version_position_idx)
     |> foreign_key_constraint(:channel_adapter_id)
+    |> foreign_key_constraint(:adapter_override_id)
     |> foreign_key_constraint(:sequence_version_id)
+  end
+
+  defp validate_adapter_override_conflict(changeset) do
+    if get_field(changeset, :channel_adapter_id) && get_field(changeset, :adapter_override_id) do
+      add_error(changeset, :adapter_override_id, "cannot be set with channel_adapter_id")
+    else
+      changeset
+    end
   end
 end

@@ -1,6 +1,11 @@
 defmodule Mix.Tasks.Dripdrop.Gen.Migration do
   @moduledoc """
   Generates a host migration that applies pending DripDrop schema upgrades.
+
+  Migration files are vendored under `priv/dripdrop/sql/versions/`. The
+  generated host migration calls `DripDrop.Migration.up/0`, which applies any
+  vendored SQL versions newer than the database's recorded
+  `dripdrop.dripdrop_version`.
   """
 
   @shortdoc "Generates an Ecto wrapper migration for DripDrop upgrades"

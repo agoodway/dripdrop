@@ -35,6 +35,32 @@ defmodule DripDrop.IngestTest do
       assert event.provider_message_id == "msg-delivered"
     end
 
+    test "prefers inbound In-Reply-To correlation over provider message id" do
+      %{adapter: adapter, execution: execution} = delivery_context("provider-msg")
+
+      execution
+      |> StepExecution.changeset(%{out_message_id: "<outbound@example.com>"})
+      |> TestRepo.update!()
+
+      request =
+        mailgun_request("inbound", "evt-threaded-reply", "wrong-provider-msg", %{
+          "message" => %{
+            "headers" => %{
+              "message-id" => "wrong-provider-msg",
+              "in-reply-to" => "<outbound@example.com>",
+              "references" => "<first@example.com> <outbound@example.com>"
+            }
+          }
+        })
+
+      assert :ok = DripDrop.Ingest.ingest(adapter, request)
+
+      event = TestRepo.one!(MessageEvent)
+      assert event.step_execution_id == execution.id
+      assert event.in_reply_to == "<outbound@example.com>"
+      assert event.references_list == ["<first@example.com>", "<outbound@example.com>"]
+    end
+
     test "persists unmatched events and emits telemetry" do
       attach_telemetry([:dripdrop, :ingest, :unmatched_event])
       adapter = mailgun_adapter()
@@ -64,6 +90,170 @@ defmodule DripDrop.IngestTest do
 
       assert_receive {:telemetry, [:dripdrop, :ingest, :duplicate], %{count: 1},
                       %{provider: "mailgun"}}
+    end
+  end
+
+  describe "host-callable inbound ingestion" do
+    test "correlates IMAP-fed replies by Message-ID and routes reply behavior" do
+      %{adapter: adapter, enrollment: enrollment, execution: execution} =
+        delivery_context("provider-msg",
+          step_config: %{"reply_behavior" => "pause_enrollment"}
+        )
+
+      execution
+      |> StepExecution.changeset(%{out_message_id: "<m1@dripdrop.example>"})
+      |> TestRepo.update!()
+
+      assert :ok =
+               DripDrop.ingest_inbound_message(adapter.id, %{
+                 message_id: "abc@gmail.com",
+                 in_reply_to: "m1@dripdrop.example",
+                 references: ["m0@dripdrop.example", "m1@dripdrop.example"],
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 body_text: "Sure, let's talk.",
+                 received_at: DateTime.utc_now(:second),
+                 intent: :reply
+               })
+
+      event = TestRepo.one!(MessageEvent)
+      assert event.step_execution_id == execution.id
+      assert event.event_type == "replied"
+      assert event.in_reply_to == "m1@dripdrop.example"
+      assert event.references_list == ["m0@dripdrop.example", "m1@dripdrop.example"]
+      assert TestRepo.get!(Enrollment, enrollment.id).state == "paused"
+    end
+
+    test "persists uncorrelated host inbound messages for forensics" do
+      attach_telemetry([:dripdrop, :ingest, :unmatched_event])
+
+      assert :ok =
+               DripDrop.ingest_inbound_message(%{tenant_key: "tenant-a", provider: "imap"}, %{
+                 message_id: "unmatched@example.com",
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 body_text: "Hello",
+                 received_at: DateTime.utc_now(:second)
+               })
+
+      event = TestRepo.one!(MessageEvent)
+      assert is_nil(event.step_execution_id)
+      assert event.provider == "imap"
+
+      assert_receive {:telemetry, [:dripdrop, :ingest, :unmatched_event], %{count: 1},
+                      %{provider: "imap"}}
+    end
+
+    test "OOO intent reschedules the next step" do
+      attach_telemetry([:dripdrop, :ingest, :ooo_rescheduled])
+
+      %{adapter: adapter, enrollment: enrollment, execution: execution} =
+        delivery_context("provider-msg")
+
+      execution
+      |> StepExecution.changeset(%{out_message_id: "<m1@dripdrop.example>"})
+      |> TestRepo.update!()
+
+      return_at = ~D[2026-06-15]
+
+      assert :ok =
+               DripDrop.ingest_inbound_message(adapter.id, %{
+                 message_id: "ooo@example.com",
+                 in_reply_to: "m1@dripdrop.example",
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 body_text: "Out of office",
+                 received_at: DateTime.utc_now(:second),
+                 intent: :ooo,
+                 intent_data: %{return_at: return_at}
+               })
+
+      reloaded = TestRepo.get!(StepExecution, execution.id)
+      assert reloaded.scheduled_for == DateTime.new!(return_at, ~T[09:00:00], "Etc/UTC")
+
+      assert TestRepo.exists?(
+               from(event in DripDrop.Event,
+                 where: event.enrollment_id == ^enrollment.id,
+                 where: event.event_key == "ooo_rescheduled"
+               )
+             )
+
+      assert_receive {:telemetry, [:dripdrop, :ingest, :ooo_rescheduled], %{count: 1},
+                      %{enrollment_id: enrollment_id}}
+
+      assert enrollment_id == enrollment.id
+    end
+
+    test "rejects invalid host inbound shape" do
+      assert {:error, {:unknown_keys, [:unexpected]}} =
+               DripDrop.ingest_inbound_message(%{tenant_key: "tenant-a"}, %{
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 received_at: DateTime.utc_now(:second),
+                 unexpected: true
+               })
+    end
+
+    test "rejects host inbound without a Message-ID" do
+      assert {:error, :no_message_id} =
+               DripDrop.ingest_inbound_message(%{tenant_key: "tenant-a"}, %{
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 received_at: DateTime.utc_now(:second),
+                 body_text: "Hi"
+               })
+    end
+
+    test "deduplicates duplicate host inbound by (provider, message_id)" do
+      attach_telemetry([:dripdrop, :ingest, :duplicate_event])
+
+      message = fn ->
+        %{
+          message_id: "dup-msg@example.com",
+          from: "prospect@example.org",
+          to: "sales@example.com",
+          body_text: "Hi",
+          received_at: DateTime.utc_now(:second)
+        }
+      end
+
+      scope = %{tenant_key: "tenant-a", provider: "imap"}
+
+      assert :ok = DripDrop.ingest_inbound_message(scope, message.())
+      assert :ok = DripDrop.ingest_inbound_message(scope, message.())
+
+      assert TestRepo.aggregate(MessageEvent, :count) == 1
+
+      assert_receive {:telemetry, [:dripdrop, :ingest, :duplicate_event], %{count: 1},
+                      %{provider: "imap", provider_event_id: "dup-msg@example.com"}}
+    end
+
+    test "does not resurrect a cancelled enrollment when correlated inbound arrives" do
+      %{adapter: adapter, enrollment: enrollment, execution: execution} =
+        delivery_context("provider-msg",
+          step_config: %{"reply_behavior" => "pause_enrollment"}
+        )
+
+      execution
+      |> StepExecution.changeset(%{out_message_id: "<m1@dripdrop.example>"})
+      |> TestRepo.update!()
+
+      enrollment
+      |> Enrollment.transition_changeset("cancelled")
+      |> TestRepo.update!()
+
+      assert :ok =
+               DripDrop.ingest_inbound_message(adapter.id, %{
+                 message_id: "reply-after-cancel@gmail.com",
+                 in_reply_to: "m1@dripdrop.example",
+                 from: "prospect@example.org",
+                 to: "sales@example.com",
+                 body_text: "Reply after cancel.",
+                 received_at: DateTime.utc_now(:second),
+                 intent: :reply
+               })
+
+      assert TestRepo.get!(Enrollment, enrollment.id).state == "cancelled"
     end
   end
 

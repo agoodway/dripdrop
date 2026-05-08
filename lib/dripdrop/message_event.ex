@@ -10,7 +10,7 @@ defmodule DripDrop.MessageEvent do
 
   import Ecto.Changeset
 
-  alias DripDrop.StepExecution
+  alias DripDrop.{ChannelAdapter, StepExecution}
 
   @primary_key {:id, :binary_id, autogenerate: false, read_after_writes: true}
   @foreign_key_type :binary_id
@@ -25,9 +25,12 @@ defmodule DripDrop.MessageEvent do
     field(:provider_event_id, :string)
     field(:event_type, :string)
     field(:event_data, :map, default: %{})
+    field(:in_reply_to, :string)
+    field(:references_list, {:array, :string})
     field(:occurred_at, :utc_datetime)
 
     belongs_to(:step_execution, StepExecution)
+    belongs_to(:adapter, ChannelAdapter)
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
@@ -40,6 +43,7 @@ defmodule DripDrop.MessageEvent do
     event
     |> cast(attrs, [
       :step_execution_id,
+      :adapter_id,
       :tenant_key,
       :channel,
       :provider,
@@ -47,11 +51,14 @@ defmodule DripDrop.MessageEvent do
       :provider_event_id,
       :event_type,
       :event_data,
+      :in_reply_to,
+      :references_list,
       :occurred_at
     ])
     |> validate_required([:channel, :provider, :event_type])
     |> validate_inclusion(:event_type, @event_types)
     |> foreign_key_constraint(:step_execution_id)
+    |> foreign_key_constraint(:adapter_id)
     |> unique_constraint(:provider_event_id, name: :message_events_provider_event_idx)
   end
 end

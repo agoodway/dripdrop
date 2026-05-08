@@ -24,6 +24,9 @@ defmodule DripDrop.IntegrationCase do
     step_transitions
     steps
     http_hooks
+    adapter_sequence_budgets
+    adapter_pool_members
+    adapter_pools
     sequence_versions
     channel_adapters
     sequences

@@ -8,11 +8,15 @@ defmodule DripDrop do
   """
 
   alias DripDrop.{
+    AdapterHealth,
+    AdapterPools,
+    AdapterSequenceBudgets,
     Channel,
     ChannelAdapters,
     Dispatch,
     Enrollments,
     HttpHooks,
+    Inbound,
     SequenceAuthoring,
     StartupCheck,
     Suppressions,
@@ -77,6 +81,48 @@ defmodule DripDrop do
   @spec get_default_adapter(binary() | atom(), binary() | nil) :: Ecto.Schema.t() | nil
   defdelegate get_default_adapter(channel, tenant_key), to: ChannelAdapters
 
+  @doc "Creates an outbound adapter pool."
+  @spec create_adapter_pool(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  defdelegate create_adapter_pool(attrs), to: AdapterPools
+
+  @doc "Updates an outbound adapter pool."
+  @spec update_adapter_pool(Ecto.Schema.t() | Ecto.UUID.t(), map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  defdelegate update_adapter_pool(pool_or_id, attrs), to: AdapterPools
+
+  @doc "Deletes an outbound adapter pool."
+  @spec delete_adapter_pool(Ecto.Schema.t() | Ecto.UUID.t(), map() | keyword()) ::
+          {:ok, Ecto.Schema.t()} | {:error, map()}
+  defdelegate delete_adapter_pool(pool_or_id, opts), to: AdapterPools
+
+  @doc "Lists outbound adapter pools."
+  @spec list_adapter_pools(map()) :: [Ecto.Schema.t()]
+  defdelegate list_adapter_pools(filters), to: AdapterPools
+
+  @doc "Adds an adapter to an outbound pool."
+  @spec add_pool_member(Ecto.Schema.t() | Ecto.UUID.t(), map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  defdelegate add_pool_member(pool_or_id, attrs), to: AdapterPools
+
+  @doc "Removes an adapter from an outbound pool."
+  @spec remove_pool_member(Ecto.Schema.t() | Ecto.UUID.t(), map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, :not_found}
+  defdelegate remove_pool_member(pool_or_id, attrs), to: AdapterPools
+
+  @doc "Lists outbound pool members."
+  @spec list_pool_members(Ecto.Schema.t() | Ecto.UUID.t() | map()) :: [Ecto.Schema.t()]
+  defdelegate list_pool_members(pool_or_filters), to: AdapterPools
+
+  @doc "Sets an adapter health state from a host-supplied external signal."
+  @spec set_adapter_health(Ecto.UUID.t(), map()) :: {:ok, Ecto.Schema.t()} | {:error, term()}
+  defdelegate set_adapter_health(adapter_id, attrs), to: AdapterHealth, as: :set_external_signal
+
+  @doc "Creates or updates an outbound adapter sequence budget."
+  @spec set_adapter_sequence_budget(Ecto.UUID.t(), Ecto.UUID.t(), map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  defdelegate set_adapter_sequence_budget(adapter_id, sequence_version_id, attrs \\ %{}),
+    to: AdapterSequenceBudgets
+
   @doc "Creates an HTTP hook for a sequence."
   @spec create_http_hook(Ecto.UUID.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
@@ -90,6 +136,28 @@ defmodule DripDrop do
   @doc "Runs an HTTP hook out of band and stores its redacted test result."
   @spec test_http_hook(Ecto.UUID.t(), map()) :: {:ok, term()} | {:error, term()}
   defdelegate test_http_hook(hook_id, test_data), to: HttpHooks
+
+  @doc """
+  Ingests a normalized inbound email from host-owned inbox infrastructure.
+
+  Example:
+
+      DripDrop.ingest_inbound_message(adapter.id, %{
+        message_id: "reply@gmail.com",
+        in_reply_to: "0197...@example.com",
+        references: ["0197...@example.com"],
+        from: "prospect@example.org",
+        to: "sales@example.com",
+        body_text: "Sure, let's talk.",
+        received_at: DateTime.utc_now(),
+        intent: :reply
+      })
+
+  Hosts can feed this from IMAP, Gmail API watches, or Microsoft Graph
+  subscriptions after normalizing provider-specific payloads into this map.
+  """
+  @spec ingest_inbound_message(Ecto.UUID.t() | map(), map()) :: :ok | {:error, term()}
+  defdelegate ingest_inbound_message(adapter_id_or_scope, normalized_message), to: Inbound
 
   @doc "Deprecated unscoped HTTP hook listing. Use `list_http_hooks/2`."
   @spec list_http_hooks(Ecto.UUID.t()) :: no_return()
@@ -133,6 +201,11 @@ defmodule DripDrop do
   @spec resume_enrollment(Ecto.UUID.t(), binary() | nil) ::
           {:ok, Ecto.Schema.t()} | {:error, term()}
   defdelegate resume_enrollment(enrollment_id, tenant_key), to: Enrollments
+
+  @doc "Reassigns an enrollment to a different outbound adapter."
+  @spec repin_enrollment(Ecto.UUID.t(), Ecto.UUID.t(), keyword() | map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, term()}
+  defdelegate repin_enrollment(enrollment_id, new_adapter_id, opts \\ []), to: Enrollments
 
   @doc "Tracks an event by subscriber identity (tenant_key in the map) or deprecated unscoped enrollment id."
   @spec track_event(Ecto.UUID.t() | map(), binary(), map()) ::

@@ -141,7 +141,7 @@ A second-opinion consult with Codex (preserved in the planning thread) shaped th
 
 ### D10. Lifecycle non-regression is the primary correctness invariant
 
-**Decision:** Every test in the foundation's lifecycle test suite (Section 14a integration tests, plus all per-capability scenario tests) MUST continue to pass byte-identically after this change lands. New outbound tests run in addition, never replacing or modifying lifecycle assertions. CI runs the lifecycle suite both with the new schema (`V02` migration applied) and against any sequence with `mode = lifecycle`, asserting no behavioral drift.
+**Decision:** Every test in the foundation's lifecycle test suite (Section 14a integration tests, plus all per-capability scenario tests) MUST continue to pass byte-identically after this change lands. New outbound tests run in addition, never replacing or modifying lifecycle assertions. CI runs the lifecycle suite against the updated initial schema and against any sequence with `mode = lifecycle`, asserting no behavioral drift.
 
 **Rationale:** The user's hard constraint. Without this invariant, "outbound mode is purely additive" is unverifiable.
 
@@ -158,10 +158,10 @@ A second-opinion consult with Codex (preserved in the planning thread) shaped th
 
 ## Migration Plan
 
-- **Schema:** new EctoEvolver version `V02` adds `adapter_pools`, `adapter_pool_members`, `adapter_sequence_budgets` tables and the new columns on `channel_adapters`, `enrollments`, `sequence_versions`, `steps`, `step_executions`, `message_events`. All new columns are nullable. No backfill required.
+- **Schema:** the initial EctoEvolver `V01` SQL now includes `adapter_pools`, `adapter_pool_members`, `adapter_sequence_budgets` tables and the new columns on `channel_adapters`, `enrollments`, `sequence_versions`, `steps`, `step_executions`, `message_events`. All new columns are nullable. No backfill required because DripDrop is not in production yet.
 - **Existing data:** untouched. Existing sequences default to `mode = lifecycle`. Existing enrollments leave `effective_mode NULL` which the dispatcher treats as `:lifecycle`. Existing channel adapters leave health/ramp columns null and skip the new gates.
-- **Rollback:** drop the three new tables; drop the new columns. Lifecycle behavior remains identical. The `V02` migration's down step does this.
-- **Foundation patches:** the `add-dripdrop-foundation` change ships its 9a Section patches in `V01`. This change builds on those without modifying them. `V02` only adds; never alters `V01`-introduced columns.
+- **Rollback:** the existing `V01` down step drops the DripDrop schema. No separate downgrade path is maintained while the library is pre-production.
+- **Foundation patches:** the `add-dripdrop-foundation` change is archived. This change builds on that foundation by updating the initial schema directly, while preserving lifecycle semantics.
 - **Public API:** all new functions are additive on the `DripDrop.*` module. No existing function signatures change.
 - **Test strategy:** new outbound integration tests run alongside the lifecycle suite. CI fails if any lifecycle test changes behavior.
 

@@ -90,7 +90,14 @@ defmodule DripDrop.Policy.SendingRules do
   defp daily_cap_decision(context, adapter, sender_mailbox) do
     case daily_cap(context.step, adapter) do
       nil -> {:not_configured, :daily_cap}
-      cap -> query_daily_cap(context, sender_mailbox, cap)
+      cap -> query_daily_caps(context, adapter, sender_mailbox, cap)
+    end
+  end
+
+  defp query_daily_caps(context, adapter, sender_mailbox, cap) do
+    with {:ok, sender_decision} <- query_daily_cap(context, sender_mailbox, cap),
+         {:ok, adapter_decision} <- query_adapter_daily_cap(context, adapter, cap) do
+      {:ok, strictest_decision([sender_decision, adapter_decision])}
     end
   end
 
@@ -131,27 +138,93 @@ defmodule DripDrop.Policy.SendingRules do
     end
   end
 
+  defp query_adapter_daily_cap(
+         %{enrollment: %{effective_mode: :outbound}} = context,
+         adapter,
+         cap
+       ) do
+    schema = @schema
+    timezone = timezone(context.step)
+
+    sql = """
+    WITH local_clock AS (
+      SELECT timezone($1::text, now()) AS local_now
+    ),
+    bounds AS (
+      SELECT
+        timezone($1::text, date_trunc('day', local_now)) AS starts_at,
+        timezone($1::text, date_trunc('day', local_now) + interval '1 day') AS next_day
+      FROM local_clock
+    ),
+    sent AS (
+      SELECT count(*)::int AS sent_count
+      FROM #{schema}.message_events, bounds
+      WHERE event_type = 'sent'
+        AND occurred_at >= bounds.starts_at
+        AND occurred_at < bounds.next_day
+        AND (($2::text IS NULL AND tenant_key IS NULL) OR tenant_key = $2::text)
+        AND event_data->>'adapter_id' = $3::text
+    )
+    SELECT sent.sent_count, bounds.next_day
+    FROM sent, bounds
+    """
+
+    case Repo.query(sql, [timezone, context.execution.tenant_key, adapter.id]) do
+      {:ok, %{rows: [[sent_count, next_day]]}} ->
+        {:ok,
+         %{
+           allowed?: sent_count < cap,
+           sent_count: sent_count,
+           cap: cap,
+           defer_until: next_day,
+           scope: "adapter",
+           adapter_id: adapter.id
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp query_adapter_daily_cap(_context, _adapter, _cap), do: {:ok, %{allowed?: true}}
+
+  defp strictest_decision(decisions) do
+    decisions
+    |> Enum.reject(& &1.allowed?)
+    |> Enum.max_by(& &1.sent_count, fn -> hd(decisions) end)
+  end
+
   defp emit_decision(%{allowed?: true}, _context, _adapter, _sender_mailbox), do: :ok
 
   defp emit_decision(decision, context, adapter, sender_mailbox) do
-    :telemetry.execute([:dripdrop, :policy, :daily_cap], %{count: 1}, %{
-      step_execution_id: context.execution.id,
-      tenant_key: context.execution.tenant_key,
-      adapter_id: adapter.id,
-      sender_mailbox: sender_mailbox,
-      sent_count: decision.sent_count,
-      cap: decision.cap,
-      defer_until: decision.defer_until
-    })
+    telemetry_metadata =
+      %{
+        step_execution_id: context.execution.id,
+        tenant_key: context.execution.tenant_key,
+        adapter_id: adapter.id,
+        sender_mailbox: sender_mailbox,
+        sent_count: decision.sent_count,
+        cap: decision.cap,
+        defer_until: decision.defer_until
+      }
+      |> maybe_put_scope(decision)
 
-    {:defer, decision.defer_until,
-     %{
-       reason: "daily_cap",
-       sender_mailbox: sender_mailbox,
-       sent_count: decision.sent_count,
-       cap: decision.cap
-     }}
+    :telemetry.execute([:dripdrop, :policy, :daily_cap], %{count: 1}, telemetry_metadata)
+
+    metadata =
+      %{
+        reason: "daily_cap",
+        sender_mailbox: sender_mailbox,
+        sent_count: decision.sent_count,
+        cap: decision.cap
+      }
+      |> maybe_put_scope(decision)
+
+    {:defer, decision.defer_until, metadata}
   end
+
+  defp maybe_put_scope(metadata, %{scope: scope}), do: Map.put(metadata, :scope, scope)
+  defp maybe_put_scope(metadata, _decision), do: metadata
 
   defp timezone(step) do
     config_value(step, ["sending_rules", "timezone"]) ||

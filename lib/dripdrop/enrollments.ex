@@ -8,6 +8,10 @@ defmodule DripDrop.Enrollments do
   alias Ecto.Multi
 
   alias DripDrop.{
+    AdapterPool,
+    AdapterPoolMember,
+    AdapterPools.WDRR,
+    ChannelAdapter,
     Clock,
     Enrollment,
     Event,
@@ -50,38 +54,45 @@ defmodule DripDrop.Enrollments do
     first_step = first_step!(repo, version.id, attr(attrs, :starting_step_key))
     scheduled_for = scheduled_for(first_step)
 
-    enrollment_changeset =
-      %Enrollment{}
-      |> Enrollment.changeset(
-        attrs
-        |> normalize_attrs()
-        |> Map.put(:sequence_id, sequence.id)
-        |> Map.put(:sequence_version_id, version.id)
-        |> Map.put(:tenant_key, sequence.tenant_key)
-        |> Map.put(:subscriber_type, subscriber_type)
-        |> Map.put(:subscriber_id, subscriber_id)
-        |> Map.put_new(:state, "active")
-        |> Map.put_new(:started_at, Clock.now())
-      )
+    with {:ok, pinning} <- enrollment_pinning(version) do
+      enrollment_changeset =
+        %Enrollment{}
+        |> Enrollment.changeset(
+          attrs
+          |> normalize_attrs()
+          |> Map.put(:sequence_id, sequence.id)
+          |> Map.put(:sequence_version_id, version.id)
+          |> Map.put(:tenant_key, sequence.tenant_key)
+          |> Map.put(:subscriber_type, subscriber_type)
+          |> Map.put(:subscriber_id, subscriber_id)
+          |> Map.merge(pinning)
+          |> Map.put_new(:state, "active")
+          |> Map.put_new(:started_at, Clock.now())
+        )
 
-    Multi.new()
-    |> Multi.insert(:enrollment, enrollment_changeset)
-    |> Multi.insert(:step_execution, fn %{enrollment: enrollment} ->
-      step_execution_changeset(enrollment, first_step, scheduled_for)
-    end)
-    |> Multi.run(:schedule, fn _repo, %{step_execution: execution} ->
-      Scheduler.configured().schedule(execution, scheduled_for)
-    end)
-    |> Multi.update(:scheduled_step_execution, fn %{step_execution: execution, schedule: job_id} ->
-      StepExecution.changeset(execution, %{
-        scheduler_job_id: job_id_to_string(job_id),
-        scheduler_backend: Scheduler.configured_name()
-      })
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{enrollment: enrollment}} -> {:ok, enrollment}
-      {:error, _step, reason, _changes} -> {:error, reason}
+      Multi.new()
+      |> Multi.insert(:enrollment, enrollment_changeset)
+      |> Multi.insert(:step_execution, fn %{enrollment: enrollment} ->
+        step_execution_changeset(enrollment, first_step, scheduled_for)
+      end)
+      |> Multi.run(:schedule, fn _repo, %{step_execution: execution} ->
+        Scheduler.configured().schedule(execution, scheduled_for)
+      end)
+      |> Multi.update(:scheduled_step_execution, fn %{step_execution: execution, schedule: job_id} ->
+        StepExecution.changeset(execution, %{
+          scheduler_job_id: job_id_to_string(job_id),
+          scheduler_backend: Scheduler.configured_name()
+        })
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{enrollment: enrollment}} ->
+          emit_adapter_pinned(enrollment, pinning)
+          {:ok, enrollment}
+
+        {:error, _step, reason, _changes} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -158,7 +169,92 @@ defmodule DripDrop.Enrollments do
   def unenroll(enrollment_id, tenant_key),
     do: transition_with_pending_cancellation(enrollment_id, tenant_key, "cancelled")
 
-  @spec track_event(Ecto.UUID.t(), binary(), map()) :: no_return()
+  @doc """
+  Reassigns an outbound enrollment to a different adapter without changing in-flight executions.
+
+  Requires an explicit `:tenant_key` in `opts` and validates that `new_adapter_id`
+  belongs to the same tenant, is active, and is in a usable health state.
+  """
+  @spec repin_enrollment(Ecto.UUID.t(), Ecto.UUID.t(), keyword() | map()) ::
+          {:ok, Ecto.Schema.t()} | {:error, term()}
+  def repin_enrollment(enrollment_id, new_adapter_id, opts \\ []) do
+    opts = if is_list(opts), do: Map.new(opts), else: opts
+    tenant_key = TenantScope.fetch!(opts, :repin_enrollment)
+    repo = Repo.repo!()
+    enrollment = fetch_scoped_enrollment!(repo, enrollment_id, tenant_key)
+
+    with {:ok, _adapter} <- fetch_pinnable_adapter(repo, new_adapter_id, tenant_key) do
+      do_repin_enrollment(enrollment, new_adapter_id, opts)
+    end
+  end
+
+  defp do_repin_enrollment(enrollment, new_adapter_id, opts) do
+    old_adapter_id = enrollment.adapter_id
+    reason = Map.get(opts, :reason, Map.get(opts, "reason"))
+
+    Multi.new()
+    |> Multi.update(:enrollment, Enrollment.changeset(enrollment, %{adapter_id: new_adapter_id}))
+    |> Multi.insert(:event, fn %{enrollment: updated} ->
+      Event.changeset(%Event{}, %{
+        enrollment_id: updated.id,
+        tenant_key: updated.tenant_key,
+        subscriber_type: updated.subscriber_type,
+        subscriber_id: updated.subscriber_id,
+        event_type: "enrollment_event",
+        event_key: "sender_reassigned",
+        event_data: %{
+          old_adapter_id: old_adapter_id,
+          new_adapter_id: new_adapter_id,
+          reason: reason
+        },
+        occurred_at: Clock.now()
+      })
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{enrollment: enrollment}} ->
+        :telemetry.execute([:dripdrop, :enrollment, :sender_reassigned], %{count: 1}, %{
+          enrollment_id: enrollment.id,
+          old_adapter_id: old_adapter_id,
+          new_adapter_id: new_adapter_id,
+          reason: reason,
+          tenant_key: enrollment.tenant_key
+        })
+
+        {:ok, enrollment}
+
+      {:error, _step, reason, _changes} ->
+        {:error, reason}
+    end
+  end
+
+  @pinnable_health_states ~w(active ramping probing)a
+
+  defp fetch_pinnable_adapter(repo, adapter_id, tenant_key) do
+    query =
+      ChannelAdapter
+      |> where([a], a.id == ^adapter_id)
+      |> where_tenant_scope(tenant_key)
+      |> limit(1)
+
+    case repo.one(query) do
+      nil ->
+        {:error, :adapter_not_found}
+
+      %ChannelAdapter{active: false} ->
+        {:error, :adapter_inactive}
+
+      %ChannelAdapter{health_state: state}
+      when not is_nil(state) and state not in @pinnable_health_states ->
+        {:error, {:adapter_health, state}}
+
+      %ChannelAdapter{} = adapter ->
+        {:ok, adapter}
+    end
+  end
+
+  @spec track_event(Ecto.UUID.t() | map(), binary(), map()) ::
+          {:ok, Ecto.Schema.t() | map()} | {:error, Ecto.Changeset.t()} | no_return()
   @doc """
   Deprecated unscoped event tracking by enrollment id. Use `track_event/4`.
   """
@@ -279,6 +375,111 @@ defmodule DripDrop.Enrollments do
       idempotency_key: idempotency_key,
       channel: step.channel,
       recipient: recipient(enrollment, step)
+    })
+  end
+
+  defp enrollment_pinning(%SequenceVersion{mode: :outbound} = version) do
+    with {:ok, pool} <- outbound_pool(version),
+         {:ok, member} <- WDRR.pick_member(pool, version) do
+      {:ok, %{adapter_id: member.adapter_id, effective_mode: :outbound}}
+    else
+      {:error, :pool_exhausted} ->
+        pool = version |> pool_id() |> pool_for_error()
+        handle_pool_exhausted(version, pool)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp enrollment_pinning(_version), do: {:ok, %{}}
+
+  defp outbound_pool(version) do
+    case pool_id(version) do
+      nil ->
+        {:error, :outbound_requires_pool}
+
+      pool_id ->
+        case Repo.get(AdapterPool, pool_id) do
+          %AdapterPool{} = pool -> {:ok, pool}
+          nil -> {:error, :missing_adapter_pool}
+        end
+    end
+  end
+
+  defp pool_id(%SequenceVersion{config: config}), do: pool_id(config)
+  defp pool_id(%{"pool_id" => pool_id}) when is_binary(pool_id), do: pool_id
+  defp pool_id(%{pool_id: pool_id}) when is_binary(pool_id), do: pool_id
+  defp pool_id(_config), do: nil
+
+  defp pool_for_error(nil), do: nil
+  defp pool_for_error(pool_id), do: Repo.get(AdapterPool, pool_id)
+
+  defp handle_pool_exhausted(version, %AdapterPool{on_pin_unavailable: :reassign} = pool) do
+    evicted_adapter_ids = pool_member_adapter_ids(pool.id)
+
+    case WDRR.pick_active_member(pool, version) do
+      {:ok, member} ->
+        {:ok,
+         %{
+           adapter_id: member.adapter_id,
+           effective_mode: :outbound,
+           metadata: %{
+             "pin_unavailable_reassigned" => true,
+             "evicted_adapter_ids" => evicted_adapter_ids
+           }
+         }}
+
+      {:error, :pool_exhausted} ->
+        error = pool_exhausted_error(pool)
+        emit_pool_exhausted(version, pool, error.evicted_adapter_ids)
+        {:error, error}
+    end
+  end
+
+  defp handle_pool_exhausted(version, pool) do
+    error = pool_exhausted_error(pool)
+    emit_pool_exhausted(version, pool, error.evicted_adapter_ids)
+    {:error, error}
+  end
+
+  defp pool_exhausted_error(nil),
+    do: %{reason: :pool_exhausted, pool_id: nil, evicted_adapter_ids: []}
+
+  defp pool_exhausted_error(%AdapterPool{} = pool) do
+    %{
+      reason: :pool_exhausted,
+      pool_id: pool.id,
+      evicted_adapter_ids: pool_member_adapter_ids(pool.id)
+    }
+  end
+
+  defp pool_member_adapter_ids(pool_id) do
+    AdapterPoolMember
+    |> where([member], member.pool_id == ^pool_id)
+    |> select([member], member.adapter_id)
+    |> Repo.all()
+  end
+
+  defp emit_adapter_pinned(_enrollment, %{adapter_id: nil}), do: :ok
+
+  defp emit_adapter_pinned(enrollment, %{adapter_id: adapter_id}) do
+    :telemetry.execute([:dripdrop, :dispatch, :adapter_pinned], %{count: 1}, %{
+      enrollment_id: enrollment.id,
+      sequence_version_id: enrollment.sequence_version_id,
+      adapter_id: adapter_id,
+      tenant_key: enrollment.tenant_key
+    })
+  end
+
+  defp emit_adapter_pinned(_enrollment, %{}), do: :ok
+
+  defp emit_pool_exhausted(version, pool, evicted_adapter_ids) do
+    :telemetry.execute([:dripdrop, :dispatch, :pool_exhausted], %{count: 1}, %{
+      pool_id: pool && pool.id,
+      sequence_version_id: version.id,
+      evicted_adapter_ids: evicted_adapter_ids,
+      tenant_key: version.tenant_key
     })
   end
 

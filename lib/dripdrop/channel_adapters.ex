@@ -108,6 +108,22 @@ defmodule DripDrop.ChannelAdapters do
     end
   end
 
+  @spec select_outbound(term(), term()) ::
+          {:ok, Ecto.Schema.t()}
+          | {:error, %{kind: :permanent, reason: :no_outbound_pin | :no_adapter}}
+  @doc """
+  Selects the pinned outbound adapter, allowing a per-step override.
+  """
+  def select_outbound(step, enrollment) do
+    with nil <- outbound_override_adapter(step),
+         nil <- pinned_adapter(step, enrollment) do
+      {:error, %{kind: :permanent, reason: :no_outbound_pin}}
+    else
+      %ChannelAdapter{} = adapter -> {:ok, adapter}
+      :missing_override -> {:error, %{kind: :permanent, reason: :no_adapter}}
+    end
+  end
+
   defp promote_new_default(changeset) do
     Multi.new()
     |> Multi.update_all(:demote_previous, defaults_query(changeset), set: [is_default: false])
@@ -188,6 +204,22 @@ defmodule DripDrop.ChannelAdapters do
   end
 
   defp explicit_step_adapter(_step), do: nil
+
+  defp outbound_override_adapter(%{adapter_override_id: nil}), do: nil
+
+  defp outbound_override_adapter(%{adapter_override_id: adapter_id, channel: channel})
+       when is_binary(adapter_id) do
+    adapter_by_id(adapter_id, channel) || :missing_override
+  end
+
+  defp outbound_override_adapter(_step), do: nil
+
+  defp pinned_adapter(%{channel: channel}, %{adapter_id: adapter_id})
+       when is_binary(adapter_id) do
+    adapter_by_id(adapter_id, channel)
+  end
+
+  defp pinned_adapter(_step, _enrollment), do: nil
 
   defp rotated_adapter(step, sequence, step_execution) do
     rotation = step_rotation(step) || sequence_rotation(step, sequence)

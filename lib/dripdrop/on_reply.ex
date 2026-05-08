@@ -33,16 +33,32 @@ defmodule DripDrop.OnReply do
     execution =
       Repo.repo!().preload(execution, [:step, :enrollment])
 
-    if pause_on_reply?(execution.step) do
-      pause(execution.enrollment)
-    else
-      :ok
+    cond do
+      not pause_on_reply?(execution.step) -> :ok
+      terminal_enrollment?(execution.enrollment) -> emit_skipped(execution.enrollment)
+      true -> pause(execution.enrollment)
     end
   end
 
   defp pause_on_reply?(%{config: %{"reply_behavior" => "pause_enrollment"}}), do: true
   defp pause_on_reply?(%{config: %{reply_behavior: "pause_enrollment"}}), do: true
   defp pause_on_reply?(_step), do: false
+
+  defp terminal_enrollment?(%Enrollment{state: state})
+       when state in ["cancelled", "completed", "suppressed"],
+       do: true
+
+  defp terminal_enrollment?(_enrollment), do: false
+
+  defp emit_skipped(%Enrollment{} = enrollment) do
+    :telemetry.execute([:dripdrop, :ingest, :reply_skipped_terminal], %{count: 1}, %{
+      enrollment_id: enrollment.id,
+      enrollment_state: enrollment.state,
+      tenant_key: enrollment.tenant_key
+    })
+
+    :ok
+  end
 
   defp pause(%Enrollment{id: enrollment_id, tenant_key: tenant_key}) do
     case Enrollments.pause_enrollment(enrollment_id, tenant_key) do

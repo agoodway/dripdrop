@@ -1,7 +1,7 @@
 defmodule DripDrop.EnrollmentsTest do
   use DripDrop.DataCase, async: false
 
-  alias DripDrop.{Enrollment, Fixtures, StepExecution, TestRepo}
+  alias DripDrop.{Enrollment, Event, Fixtures, StepExecution, TestRepo}
 
   describe "enroll/1" do
     test "creates an active enrollment and schedules the first step by sequence key" do
@@ -43,6 +43,76 @@ defmodule DripDrop.EnrollmentsTest do
                from(execution in StepExecution, where: execution.enrollment_id == ^first.id),
                :count
              ) == 1
+    end
+
+    test "outbound enrollment stores adapter pin and effective mode atomically" do
+      attach_telemetry([:dripdrop, :dispatch, :adapter_pinned])
+      %{sequence: sequence, adapter: adapter} = active_outbound_sequence()
+
+      assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
+      assert enrollment.adapter_id == adapter.id
+      assert enrollment.effective_mode == :outbound
+
+      assert [%StepExecution{}] =
+               TestRepo.all(
+                 from(execution in StepExecution,
+                   where: execution.enrollment_id == ^enrollment.id
+                 )
+               )
+
+      assert_receive {:telemetry, [:dripdrop, :dispatch, :adapter_pinned], %{count: 1},
+                      %{enrollment_id: enrollment_id, adapter_id: adapter_id}}
+
+      assert enrollment_id == enrollment.id
+      assert adapter_id == adapter.id
+    end
+
+    test "lifecycle enrollment leaves outbound pin columns unset" do
+      %{sequence: sequence} = active_sequence()
+
+      assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
+      assert is_nil(enrollment.adapter_id)
+      assert is_nil(enrollment.effective_mode)
+    end
+
+    test "duplicate outbound enrollment returns existing pin without re-rolling" do
+      %{sequence: sequence, adapter: adapter} = active_outbound_sequence()
+      attrs = enrollment_attrs(sequence)
+
+      assert {:ok, first} = DripDrop.enroll(attrs)
+      assert {:ok, second} = DripDrop.enroll(attrs)
+
+      assert second.id == first.id
+      assert second.adapter_id == adapter.id
+    end
+
+    test "outbound enrollment returns pool exhausted when no member is eligible" do
+      attach_telemetry([:dripdrop, :dispatch, :pool_exhausted])
+
+      %{sequence: sequence, pool: pool, adapter: adapter} =
+        active_outbound_sequence(resting?: true)
+
+      assert {:error,
+              %{reason: :pool_exhausted, pool_id: pool_id, evicted_adapter_ids: [adapter_id]}} =
+               DripDrop.enroll(enrollment_attrs(sequence))
+
+      assert pool_id == pool.id
+      assert adapter_id == adapter.id
+
+      assert_receive {:telemetry, [:dripdrop, :dispatch, :pool_exhausted], %{count: 1},
+                      %{pool_id: ^pool_id, evicted_adapter_ids: [^adapter_id]}}
+    end
+
+    test "outbound enrollment can reassign to an active resting member when configured" do
+      %{sequence: sequence, adapter: adapter} =
+        active_outbound_sequence(resting?: true, on_pin_unavailable: :reassign)
+
+      assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
+
+      assert enrollment.adapter_id == adapter.id
+      assert enrollment.effective_mode == :outbound
+      assert enrollment.metadata["pin_unavailable_reassigned"] == true
+      assert enrollment.metadata["evicted_adapter_ids"] == [adapter.id]
     end
 
     test "re-enrollment after completion creates a new row only when allowed" do
@@ -101,6 +171,17 @@ defmodule DripDrop.EnrollmentsTest do
              )
     end
 
+    test "pause and resume preserve outbound adapter pin" do
+      %{sequence: sequence, adapter: adapter} = active_outbound_sequence()
+
+      assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
+      assert {:ok, paused} = DripDrop.pause_enrollment(enrollment.id, enrollment.tenant_key)
+      assert {:ok, resumed} = DripDrop.resume_enrollment(enrollment.id, enrollment.tenant_key)
+
+      assert paused.adapter_id == adapter.id
+      assert resumed.adapter_id == adapter.id
+    end
+
     test "cancel paused enrollment sets cancelled_at and cancels pending executions" do
       %{sequence: sequence} = active_sequence()
       assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
@@ -121,6 +202,40 @@ defmodule DripDrop.EnrollmentsTest do
 
       assert {:error, :invalid_transition} =
                DripDrop.resume_enrollment(enrollment.id, enrollment.tenant_key)
+    end
+  end
+
+  describe "repin_enrollment/3" do
+    test "updates the adapter pin and records an audit event" do
+      attach_telemetry([:dripdrop, :enrollment, :sender_reassigned])
+      %{sequence: sequence, adapter: old_adapter} = active_outbound_sequence()
+
+      new_adapter =
+        Fixtures.channel_adapter_fixture(%{tenant_key: sequence.tenant_key, name: "New SMTP"})
+
+      assert {:ok, enrollment} = DripDrop.enroll(enrollment_attrs(sequence))
+
+      assert {:ok, repinned} =
+               DripDrop.repin_enrollment(enrollment.id, new_adapter.id,
+                 tenant_key: sequence.tenant_key,
+                 reason: "compliance_request"
+               )
+
+      assert repinned.adapter_id == new_adapter.id
+
+      event =
+        TestRepo.get_by!(Event, enrollment_id: enrollment.id, event_key: "sender_reassigned")
+
+      assert event.event_type == "enrollment_event"
+      assert event.event_data["old_adapter_id"] == old_adapter.id
+      assert event.event_data["new_adapter_id"] == new_adapter.id
+      assert event.event_data["reason"] == "compliance_request"
+
+      assert_receive {:telemetry, [:dripdrop, :enrollment, :sender_reassigned], %{count: 1},
+                      %{old_adapter_id: old_adapter_id, new_adapter_id: new_adapter_id}}
+
+      assert old_adapter_id == old_adapter.id
+      assert new_adapter_id == new_adapter.id
     end
   end
 
@@ -230,6 +345,44 @@ defmodule DripDrop.EnrollmentsTest do
     %{sequence: sequence, version: version, step: step}
   end
 
+  defp active_outbound_sequence(opts \\ []) do
+    sequence = Fixtures.sequence_fixture(%{tenant_key: "tenant-a"})
+
+    pool =
+      Fixtures.adapter_pool_fixture(%{
+        tenant_key: sequence.tenant_key,
+        on_pin_unavailable: Keyword.get(opts, :on_pin_unavailable, :pause)
+      })
+
+    health_attrs =
+      if Keyword.get(opts, :resting?, false) do
+        %{
+          health_state: :resting,
+          resting_until: DateTime.add(DateTime.utc_now(:second), 3600, :second)
+        }
+      else
+        %{health_state: :active}
+      end
+
+    adapter =
+      Fixtures.channel_adapter_fixture(
+        Map.merge(%{tenant_key: sequence.tenant_key, name: "Outbound SMTP"}, health_attrs)
+      )
+
+    Fixtures.adapter_pool_member_fixture(pool, adapter)
+
+    version =
+      Fixtures.sequence_version_fixture(sequence, %{
+        state: "active",
+        mode: :outbound,
+        config: %{"pool_id" => pool.id}
+      })
+
+    step = Fixtures.step_fixture(version, %{position: 1, config: %{"recipient_key" => "email"}})
+
+    %{sequence: sequence, version: version, step: step, pool: pool, adapter: adapter}
+  end
+
   defp enrollment_attrs(sequence) do
     %{
       sequence_key: sequence.key,
@@ -237,5 +390,21 @@ defmodule DripDrop.EnrollmentsTest do
       subscriber: %{type: "User", id: "u_123"},
       data: %{email: "ada@example.com"}
     }
+  end
+
+  defp attach_telemetry(event) do
+    parent = self()
+    handler_id = {__MODULE__, event, System.unique_integer([:positive])}
+
+    :telemetry.attach(
+      handler_id,
+      event,
+      fn event, measurements, metadata, _config ->
+        send(parent, {:telemetry, event, measurements, metadata})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 end

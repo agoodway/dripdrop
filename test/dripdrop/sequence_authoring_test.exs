@@ -82,7 +82,17 @@ defmodule DripDrop.SequenceAuthoringTest do
 
       assert {:ok, version} = DripDrop.create_sequence_version(sequence.id, %{version: 2})
       assert version.state == "draft"
+      assert version.mode == :lifecycle
       assert is_nil(version.published_at)
+    end
+
+    test "creates outbound versions with explicit mode" do
+      sequence = Fixtures.sequence_fixture()
+
+      assert {:ok, version} =
+               DripDrop.create_sequence_version(sequence.id, %{version: 2, mode: :outbound})
+
+      assert version.mode == :outbound
     end
 
     test "activation archives the previous active version atomically" do
@@ -114,6 +124,18 @@ defmodule DripDrop.SequenceAuthoringTest do
                |> TestRepo.insert()
 
       assert %{state: [_message]} = errors_on(changeset)
+    end
+
+    test "rejects mode mutation on active versions" do
+      sequence = Fixtures.sequence_fixture()
+      version = Fixtures.sequence_version_fixture(sequence, %{state: "active", mode: :outbound})
+
+      assert {:error, changeset} =
+               version
+               |> SequenceVersion.changeset(%{mode: :lifecycle})
+               |> TestRepo.update()
+
+      assert %{mode: ["mode_immutable_after_publish"]} = errors_on(changeset)
     end
 
     test "activation rejects a second active version when another insert wins the race" do
@@ -182,6 +204,26 @@ defmodule DripDrop.SequenceAuthoringTest do
                })
 
       assert %{key: [_message]} = errors_on(changeset)
+    end
+
+    test "rejects channel_adapter_id and adapter_override_id on the same step" do
+      version = version_fixture()
+      adapter = Fixtures.channel_adapter_fixture(%{tenant_key: version.tenant_key})
+      override = Fixtures.channel_adapter_fixture(%{tenant_key: version.tenant_key})
+
+      assert {:error, changeset} =
+               DripDrop.create_step(version.id, %{
+                 name: "Conflicting sender",
+                 key: "conflicting-sender",
+                 position: 1,
+                 channel: "email",
+                 timing: %{type: "immediate"},
+                 template_content: email_template(),
+                 channel_adapter_id: adapter.id,
+                 adapter_override_id: override.id
+               })
+
+      assert %{adapter_override_id: [_message]} = errors_on(changeset)
     end
   end
 
@@ -554,6 +596,91 @@ defmodule DripDrop.SequenceAuthoringTest do
 
       assert {:missing_channel_adapter, "digest", ^missing_adapter_id} =
                List.keyfind(errors, :missing_channel_adapter, 0)
+    end
+
+    test "outbound mode requires a non-empty tenant-aligned pool" do
+      sequence = Fixtures.sequence_fixture(%{tenant_key: "acct-a"})
+      version = Fixtures.sequence_version_fixture(sequence, %{mode: :outbound})
+      Fixtures.step_fixture(version, %{template_content: email_template()})
+
+      assert {:error, errors} = DripDrop.validate_sequence_version(version.id)
+      assert {:outbound_requires_pool, nil} in errors
+
+      other_pool = Fixtures.adapter_pool_fixture(%{tenant_key: "acct-b"})
+
+      version =
+        version
+        |> SequenceVersion.changeset(%{config: %{"pool_id" => other_pool.id}})
+        |> TestRepo.update!()
+
+      assert {:error, errors} = DripDrop.validate_sequence_version(version.id)
+      assert {:pool_tenant_mismatch, other_pool.id} in errors
+
+      pool = Fixtures.adapter_pool_fixture(%{tenant_key: "acct-a"})
+
+      version =
+        version
+        |> SequenceVersion.changeset(%{config: %{"pool_id" => pool.id}})
+        |> TestRepo.update!()
+
+      assert {:error, errors} = DripDrop.validate_sequence_version(version.id)
+      assert {:pool_empty, pool.id} in errors
+
+      adapter = Fixtures.channel_adapter_fixture(%{tenant_key: "acct-a"})
+      Fixtures.adapter_pool_member_fixture(pool, adapter)
+
+      assert {:ok, validated} = DripDrop.validate_sequence_version(version.id)
+      assert validated.id == version.id
+    end
+
+    test "lifecycle validation ignores pool_id" do
+      sequence = Fixtures.sequence_fixture(%{tenant_key: "acct-a"})
+      pool = Fixtures.adapter_pool_fixture(%{tenant_key: "acct-a"})
+
+      version =
+        Fixtures.sequence_version_fixture(sequence, %{
+          mode: :lifecycle,
+          config: %{"pool_id" => pool.id}
+        })
+
+      Fixtures.step_fixture(version, %{template_content: email_template()})
+
+      assert {:ok, validated} = DripDrop.validate_sequence_version(version.id)
+      assert validated.id == version.id
+    end
+
+    test "outbound validation reports per-step override channel mismatch" do
+      sequence = Fixtures.sequence_fixture(%{tenant_key: "acct-a"})
+      version = Fixtures.sequence_version_fixture(sequence, %{mode: :outbound})
+      pool = Fixtures.adapter_pool_fixture(%{tenant_key: "acct-a"})
+      pool_adapter = Fixtures.channel_adapter_fixture(%{tenant_key: "acct-a"})
+      Fixtures.adapter_pool_member_fixture(pool, pool_adapter)
+
+      version =
+        version
+        |> SequenceVersion.changeset(%{config: %{"pool_id" => pool.id}})
+        |> TestRepo.update!()
+
+      sms_adapter =
+        Fixtures.channel_adapter_fixture(%{
+          tenant_key: "acct-a",
+          channel: "sms",
+          provider: "twilio",
+          credentials: %{
+            "account_sid" => "AC123",
+            "auth_token" => "token",
+            "from" => "+15555550123"
+          }
+        })
+
+      step =
+        Fixtures.step_fixture(version, %{
+          template_content: email_template(),
+          adapter_override_id: sms_adapter.id
+        })
+
+      assert {:error, errors} = DripDrop.validate_sequence_version(version.id)
+      assert {:step, step.id, :override_channel_mismatch} in errors
     end
 
     test "reports hook functions that cannot resolve on the sequence hook module" do

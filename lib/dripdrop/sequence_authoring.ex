@@ -8,6 +8,8 @@ defmodule DripDrop.SequenceAuthoring do
   alias Ecto.Multi
 
   alias DripDrop.{
+    AdapterPool,
+    AdapterPoolMember,
     Clock,
     Condition,
     Helpers,
@@ -141,6 +143,7 @@ defmodule DripDrop.SequenceAuthoring do
     errors =
       []
       |> maybe_add_entry_error(version)
+      |> maybe_add_outbound_errors(version)
       |> maybe_add_adapter_errors(version)
       |> maybe_add_condition_errors(version)
       |> maybe_add_hook_reference_errors(version)
@@ -226,6 +229,89 @@ defmodule DripDrop.SequenceAuthoring do
     Enum.reduce(steps, errors, &add_adapter_errors_for_step(&1, &2, adapters))
   end
 
+  defp maybe_add_outbound_errors(errors, %SequenceVersion{mode: :outbound} = version) do
+    pool_id = pool_id(version.config || %{})
+
+    errors
+    |> maybe_add_missing_pool_error(pool_id)
+    |> maybe_add_pool_reference_error(version, pool_id)
+    |> maybe_add_override_errors(version)
+  end
+
+  defp maybe_add_outbound_errors(errors, _version), do: errors
+
+  defp maybe_add_missing_pool_error(errors, nil), do: [{:outbound_requires_pool, nil} | errors]
+  defp maybe_add_missing_pool_error(errors, _pool_id), do: errors
+
+  defp maybe_add_pool_reference_error(errors, _version, nil), do: errors
+
+  defp maybe_add_pool_reference_error(errors, version, pool_id) do
+    pool =
+      AdapterPool
+      |> where([pool], pool.id == ^pool_id)
+      |> Repo.one()
+
+    cond do
+      is_nil(pool) ->
+        [{:missing_adapter_pool, pool_id} | errors]
+
+      pool.tenant_key != version.tenant_key and not is_nil(pool.tenant_key) ->
+        [{:pool_tenant_mismatch, pool_id} | errors]
+
+      pool_empty?(pool.id) ->
+        [{:pool_empty, pool_id} | errors]
+
+      true ->
+        errors
+    end
+  end
+
+  defp maybe_add_override_errors(errors, %{steps: steps}) do
+    override_ids =
+      steps
+      |> Enum.map(& &1.adapter_override_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    adapters =
+      ChannelAdapter
+      |> where([adapter], adapter.id in ^override_ids)
+      |> where([adapter], adapter.active)
+      |> select([adapter], {adapter.id, adapter.channel})
+      |> Repo.all()
+      |> Map.new()
+
+    Enum.reduce(steps, errors, fn step, acc ->
+      add_override_error(step, adapters, acc)
+    end)
+  end
+
+  defp add_override_error(%Step{adapter_override_id: nil}, _adapters, errors), do: errors
+
+  defp add_override_error(%Step{adapter_override_id: adapter_id} = step, adapters, errors) do
+    case Map.fetch(adapters, adapter_id) do
+      :error ->
+        [{:step, step.id, :missing_adapter_override} | errors]
+
+      {:ok, channel} when channel != step.channel ->
+        [{:step, step.id, :override_channel_mismatch} | errors]
+
+      {:ok, _channel} ->
+        errors
+    end
+  end
+
+  defp pool_empty?(pool_id) do
+    AdapterPoolMember
+    |> where([member], member.pool_id == ^pool_id)
+    |> where([member], member.active)
+    |> Repo.repo!().aggregate(:count) == 0
+  end
+
+  defp pool_id(%{"pool_id" => pool_id}) when is_binary(pool_id), do: pool_id
+  defp pool_id(%{pool_id: pool_id}) when is_binary(pool_id), do: pool_id
+  defp pool_id(_config), do: nil
+
   defp add_adapter_errors_for_step(step, errors, adapters) do
     Enum.reduce(step_adapter_ids(step), errors, fn adapter_id, acc ->
       adapter_error(step, adapter_id, adapters, acc)
@@ -246,7 +332,7 @@ defmodule DripDrop.SequenceAuthoring do
   end
 
   defp step_adapter_ids(step) do
-    [step.channel_adapter_id]
+    [step.channel_adapter_id, step.adapter_override_id]
     |> Enum.concat(rotation_adapter_ids(step.config || %{}))
     |> Enum.reject(&is_nil/1)
   end

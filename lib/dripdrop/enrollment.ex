@@ -28,12 +28,14 @@ defmodule DripDrop.Enrollment do
     field(:started_at, :utc_datetime)
     field(:completed_at, :utc_datetime)
     field(:cancelled_at, :utc_datetime)
+    field(:effective_mode, Ecto.Enum, values: [lifecycle: "lifecycle", outbound: "outbound"])
     field(:data, :map, default: %{})
     field(:metadata, :map, default: %{})
 
     belongs_to(:sequence, Sequence)
     belongs_to(:sequence_version, SequenceVersion)
     belongs_to(:current_step, Step)
+    belongs_to(:adapter, DripDrop.ChannelAdapter)
     has_many(:step_executions, StepExecution)
 
     timestamps(type: :utc_datetime)
@@ -53,6 +55,8 @@ defmodule DripDrop.Enrollment do
       :subscriber_id,
       :state,
       :current_step_id,
+      :adapter_id,
+      :effective_mode,
       :started_at,
       :completed_at,
       :cancelled_at,
@@ -72,6 +76,7 @@ defmodule DripDrop.Enrollment do
     |> foreign_key_constraint(:sequence_id)
     |> foreign_key_constraint(:sequence_version_id)
     |> foreign_key_constraint(:current_step_id)
+    |> foreign_key_constraint(:adapter_id)
   end
 
   @doc """

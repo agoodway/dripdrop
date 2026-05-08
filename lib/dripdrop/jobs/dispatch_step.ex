@@ -5,22 +5,33 @@ defmodule DripDrop.Jobs.DispatchStep do
 
   import Ecto.Query
 
+  alias Ecto.Multi
+
+  alias DripDrop.AdapterPools.WDRR
   alias DripDrop.Clock
+  alias DripDrop.Concurrency.AdapterLock
   alias DripDrop.Conditions.Predicate
   alias DripDrop.Dispatch.Concurrency
   alias DripDrop.Dispatch.Steps, as: DispatchSteps
   alias DripDrop.Hooks.Evaluator
+  alias DripDrop.Policy.AdapterHealthCheck
   alias DripDrop.Policy.AdapterPause
   alias DripDrop.Policy.Gate
+  alias DripDrop.Policy.MinGap
   alias DripDrop.Policy.QuietHours
+  alias DripDrop.Policy.RampCap
   alias DripDrop.Policy.RateLimit
   alias DripDrop.Policy.SendingRules
+  alias DripDrop.Policy.SubCap
   alias DripDrop.Policy.UnsubscribeHeaders
   alias DripDrop.ShortLinks.Pipeline, as: ShortLinksPipeline
   alias DripDrop.Templates.Renderer
+  alias DripDrop.Templates.Spintax
   alias DripDrop.Templates.Variables
 
   alias DripDrop.{
+    AdapterPool,
+    ChannelAdapter,
     ChannelAdapters,
     Channels,
     Enrollment,
@@ -32,7 +43,8 @@ defmodule DripDrop.Jobs.DispatchStep do
     Step,
     StepExecution,
     StepTransition,
-    Suppressions
+    Suppressions,
+    Threading
   }
 
   use PgFlow.Job
@@ -125,22 +137,218 @@ defmodule DripDrop.Jobs.DispatchStep do
   defp deliver(context) do
     with {:ok, hook_results} <- resolve_hooks(context),
          {:ok, payload} <- Renderer.render_step(context.step, context.enrollment, hook_results),
+         payload <- Spintax.apply(payload, context.step, context.execution),
          {:ok, payload} <- ShortLinksPipeline.run(payload, short_link_context(context)),
-         {:ok, payload} <- UnsubscribeHeaders.apply(payload, context),
-         {:ok, adapter} <-
+         {:ok, payload} <- UnsubscribeHeaders.apply(payload, context) do
+      if outbound?(context) do
+        deliver_outbound(context, payload)
+      else
+        deliver_lifecycle(context, payload)
+      end
+    else
+      {:skip, reason} -> skip(context, reason)
+      {:defer, defer_until, reason} -> defer(context, defer_until, reason)
+      {:error, reason} -> fail(context, reason)
+    end
+  end
+
+  defp deliver_lifecycle(context, payload) do
+    with {:ok, adapter} <-
            ChannelAdapters.select(context.step, context.sequence, context.execution),
          :ok <- AdapterPause.check(context, adapter),
          :ok <- Concurrency.check(context, adapter),
          :ok <- SendingRules.check(context, payload, adapter),
          :ok <- RateLimit.check(context, payload, adapter),
+         {:ok, payload, threading} <- maybe_apply_lifecycle_threading(context, payload, adapter),
          {:ok, provider} <- Channels.provider_module(adapter.channel, adapter.provider),
          {:ok, sending} <- transition(context.execution, "sending"),
          {:ok, result} <- send_with_telemetry(context, provider, payload, sending, adapter) do
-      persist_success(sending, context, adapter, payload, result)
+      persist_success(sending, context, adapter, payload, result, threading)
     else
       {:skip, reason} -> skip(context, reason)
       {:defer, defer_until, reason} -> defer(context, defer_until, reason)
       {:error, reason} -> fail(context, reason)
+    end
+  end
+
+  defp deliver_outbound(context, payload) do
+    case select_outbound_adapter(context) do
+      {:ok, adapter} ->
+        run_outbound_under_lock(context, payload, adapter)
+
+      {:defer, defer_until, metadata} ->
+        defer(context, defer_until, metadata)
+
+      {:error, reason} ->
+        fail(context, reason)
+    end
+  end
+
+  defp run_outbound_under_lock(context, payload, adapter) do
+    case AdapterLock.with_lock(adapter, fn -> do_deliver_outbound(context, payload, adapter) end) do
+      {:ok, result} ->
+        result
+
+      :locked ->
+        defer(context, Clock.seconds_from_now(10), %{
+          reason: "adapter_busy",
+          adapter_id: adapter.id
+        })
+
+      {:error, reason} ->
+        fail(context, reason)
+    end
+  end
+
+  defp do_deliver_outbound(context, payload, adapter) do
+    with :ok <- AdapterPause.check(context, adapter),
+         :ok <- AdapterHealthCheck.check(context, adapter),
+         :ok <- RampCap.check(context, adapter),
+         :ok <- SubCap.check(context, adapter),
+         :ok <- MinGap.check(context, adapter),
+         :ok <- SendingRules.check(context, payload, adapter),
+         :ok <- RateLimit.check(context, payload, adapter),
+         :ok <- Concurrency.check(context, adapter),
+         {:ok, payload, threading} <- Threading.apply(payload, context, adapter),
+         {:ok, provider} <- Channels.provider_module(adapter.channel, adapter.provider),
+         {:ok, sending} <- transition(context.execution, "sending"),
+         {:ok, result} <- send_with_telemetry(context, provider, payload, sending, adapter) do
+      persist_success(sending, context, adapter, payload, result, threading)
+    else
+      {:skip, reason} -> skip(context, reason)
+      {:defer, defer_until, reason} -> defer(context, defer_until, reason)
+      {:error, reason} -> fail(context, reason)
+    end
+  end
+
+  defp select_outbound_adapter(context) do
+    case ChannelAdapters.select_outbound(context.step, context.enrollment) do
+      {:ok, adapter} ->
+        if AdapterHealthCheck.terminally_unavailable?(adapter) do
+          recover_pin(context, adapter)
+        else
+          {:ok, adapter}
+        end
+
+      {:error, %{kind: :permanent, reason: reason}}
+      when reason in [:no_outbound_pin, :no_adapter] ->
+        recover_pin(context, pinned_adapter(context))
+    end
+  end
+
+  defp recover_pin(context, current_adapter) do
+    case load_pool(context) do
+      {:ok, %AdapterPool{on_pin_unavailable: :reassign} = pool} ->
+        attempt_rebind(context, pool)
+
+      {:ok, %AdapterPool{on_pin_unavailable: :pause}} ->
+        pause_or_error(context, current_adapter)
+
+      :no_pool ->
+        {:error, %{kind: :permanent, reason: :no_outbound_pin}}
+    end
+  end
+
+  defp attempt_rebind(context, pool) do
+    case WDRR.pick_healthy_member(pool, context.sequence_version) do
+      {:ok, member} ->
+        rebind_enrollment(context, member.adapter)
+
+      {:error, :pool_exhausted} ->
+        {:defer, Clock.seconds_from_now(60), %{reason: "all_adapters_unhealthy"}}
+    end
+  end
+
+  defp rebind_enrollment(context, new_adapter) do
+    old_adapter_id = context.enrollment.adapter_id
+
+    context.enrollment
+    |> Enrollment.changeset(%{adapter_id: new_adapter.id})
+    |> Repo.update()
+    |> case do
+      {:ok, _enrollment} ->
+        :telemetry.execute([:dripdrop, :enrollment, :sender_rebound], %{count: 1}, %{
+          enrollment_id: context.enrollment.id,
+          old_adapter_id: old_adapter_id,
+          new_adapter_id: new_adapter.id,
+          tenant_key: context.enrollment.tenant_key,
+          reason: "auto_rebind"
+        })
+
+        {:ok, new_adapter}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp pause_or_error(context, current_adapter) do
+    case pause_pin_unavailable(context, current_adapter) do
+      {:ok, _enrollment} ->
+        {:defer, Clock.seconds_from_now(300), %{reason: "pinned_adapter_unavailable"}}
+
+      :not_paused ->
+        {:error, %{kind: :permanent, reason: :no_outbound_pin}}
+    end
+  end
+
+  defp load_pool(context) do
+    case get_in(context.sequence_version.config || %{}, ["pool_id"]) do
+      nil ->
+        :no_pool
+
+      pool_id ->
+        case Repo.get(AdapterPool, pool_id) do
+          %AdapterPool{} = pool -> {:ok, pool}
+          nil -> :no_pool
+        end
+    end
+  end
+
+  defp pause_pin_unavailable(context, adapter) do
+    if has_outbound_pin?(context) and AdapterHealthCheck.terminally_unavailable?(adapter) do
+      metadata =
+        (context.enrollment.metadata || %{})
+        |> Map.put("pause_reason", "pinned_adapter_unavailable")
+        |> Map.put("paused_adapter_id", context.enrollment.adapter_id)
+
+      context.enrollment
+      |> Enrollment.changeset(%{state: "paused", metadata: metadata})
+      |> Repo.update()
+      |> case do
+        {:ok, enrollment} ->
+          :telemetry.execute([:dripdrop, :enrollment, :paused_pin_unavailable], %{count: 1}, %{
+            enrollment_id: enrollment.id,
+            adapter_id: context.enrollment.adapter_id,
+            tenant_key: enrollment.tenant_key
+          })
+
+          {:ok, enrollment}
+
+        {:error, _changeset} ->
+          :not_paused
+      end
+    else
+      :not_paused
+    end
+  end
+
+  defp has_outbound_pin?(%{enrollment: %{adapter_id: adapter_id}}), do: is_binary(adapter_id)
+
+  defp pinned_adapter(%{enrollment: %{adapter_id: adapter_id}}) when is_binary(adapter_id) do
+    Repo.get(ChannelAdapter, adapter_id)
+  end
+
+  defp pinned_adapter(_context), do: nil
+
+  defp outbound?(%{enrollment: %{effective_mode: :outbound}}), do: true
+  defp outbound?(_context), do: false
+
+  defp maybe_apply_lifecycle_threading(context, payload, adapter) do
+    if get_in(context.step.config || %{}, ["thread_continuity"]) == true do
+      Threading.apply(payload, context, adapter)
+    else
+      {:ok, payload, %{}}
     end
   end
 
@@ -166,31 +374,42 @@ defmodule DripDrop.Jobs.DispatchStep do
     end
   end
 
-  defp persist_success(execution, context, adapter, payload, result) do
+  defp persist_success(execution, context, adapter, payload, result, threading) do
     response =
       result
       |> Map.get(:response, %{})
       |> Map.put(:short_links_fallback, Map.get(payload, :short_links_fallback, false))
       |> Redact.scrub()
 
+    sent_at = Clock.now()
+
     attrs = %{
       state: "sent",
-      executed_at: Clock.now(),
+      executed_at: sent_at,
       payload: Redact.scrub(payload),
       response: response,
       provider_message_id: Map.get(result, :provider_message_id),
+      out_message_id: Map.get(threading, :out_message_id),
       metadata: success_metadata(execution, adapter, payload)
     }
 
-    with {:ok, sent} <- execution |> StepExecution.changeset(attrs) |> Repo.update(),
-         {:ok, _event} <-
-           insert_message_event(
-             sent,
-             context,
-             adapter,
-             "sent",
-             sent_event_data(response, sent, adapter, payload)
-           ) do
+    multi =
+      Multi.new()
+      |> Multi.update(:sent, StepExecution.changeset(execution, attrs))
+      |> Multi.update(
+        :adapter,
+        DripDrop.ChannelAdapter.changeset(adapter, %{last_send_at: sent_at})
+      )
+      |> Multi.insert(:event, fn %{sent: sent} ->
+        message_event_changeset(
+          sent,
+          adapter,
+          "sent",
+          sent_event_data(response, sent, adapter, payload)
+        )
+      end)
+
+    with {:ok, %{sent: sent}} <- Repo.transaction(multi) do
       advance(context, sent)
     end
   end
@@ -589,11 +808,18 @@ defmodule DripDrop.Jobs.DispatchStep do
   end
 
   defp insert_message_event(execution, _context, adapter, event_type, event_data) do
-    provider = if adapter, do: adapter.provider, else: "dripdrop"
+    execution
+    |> message_event_changeset(adapter, event_type, event_data)
+    |> Repo.insert()
+  end
 
-    %MessageEvent{}
-    |> MessageEvent.changeset(%{
+  defp message_event_changeset(execution, adapter, event_type, event_data) do
+    provider = if adapter, do: adapter.provider, else: "dripdrop"
+    adapter_id = if adapter, do: adapter.id, else: nil
+
+    MessageEvent.changeset(%MessageEvent{}, %{
       step_execution_id: execution.id,
+      adapter_id: adapter_id,
       tenant_key: execution.tenant_key,
       channel: execution.channel,
       provider: provider,
@@ -602,7 +828,6 @@ defmodule DripDrop.Jobs.DispatchStep do
       event_data: event_data,
       occurred_at: Clock.now()
     })
-    |> Repo.insert()
   end
 
   defp sent_event_data(response, execution, adapter, payload) do

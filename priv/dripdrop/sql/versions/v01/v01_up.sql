@@ -59,10 +59,13 @@ CREATE TABLE $SCHEMA$.sequence_versions (
   version integer NOT NULL,
   name text,
   state $SCHEMA$.sequence_version_state NOT NULL DEFAULT 'draft',
+  mode text NOT NULL DEFAULT 'lifecycle',
   config jsonb NOT NULL DEFAULT '{}'::jsonb,
   published_at timestamptz,
   inserted_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT sequence_versions_mode_chk
+    CHECK (mode IN ('lifecycle', 'outbound'))
 );
 
 --SPLIT--
@@ -77,8 +80,29 @@ CREATE TABLE $SCHEMA$.channel_adapters (
   config jsonb NOT NULL DEFAULT '{}'::jsonb,
   is_default boolean NOT NULL DEFAULT false,
   active boolean NOT NULL DEFAULT true,
+  health_state text,
+  health_score numeric,
+  resting_until timestamptz,
+  last_send_at timestamptz,
+  daily_cap integer,
+  ramp_started_at timestamptz,
+  ramp_increment integer,
+  ramp_floor integer,
+  min_gap_seconds integer,
   inserted_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT channel_adapters_health_state_chk
+    CHECK (health_state IS NULL OR health_state IN ('active', 'resting', 'probing', 'ramping')),
+  CONSTRAINT channel_adapters_health_score_range_chk
+    CHECK (health_score IS NULL OR (health_score >= 0 AND health_score <= 1)),
+  CONSTRAINT channel_adapters_daily_cap_positive_chk
+    CHECK (daily_cap IS NULL OR daily_cap > 0),
+  CONSTRAINT channel_adapters_ramp_increment_positive_chk
+    CHECK (ramp_increment IS NULL OR ramp_increment > 0),
+  CONSTRAINT channel_adapters_ramp_floor_nonnegative_chk
+    CHECK (ramp_floor IS NULL OR ramp_floor >= 0),
+  CONSTRAINT channel_adapters_min_gap_seconds_nonnegative_chk
+    CHECK (min_gap_seconds IS NULL OR min_gap_seconds >= 0)
 );
 
 --SPLIT--
@@ -127,6 +151,7 @@ CREATE TABLE $SCHEMA$.steps (
   template_module text,
   template_function text,
   channel_adapter_id uuid REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE SET NULL,
+  adapter_override_id uuid REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE SET NULL,
   config jsonb NOT NULL DEFAULT '{}'::jsonb,
   active boolean NOT NULL DEFAULT true,
   inserted_at timestamptz NOT NULL DEFAULT now(),
@@ -207,13 +232,19 @@ CREATE TABLE $SCHEMA$.enrollments (
   subscriber_id text NOT NULL,
   state $SCHEMA$.enrollment_state NOT NULL DEFAULT 'active',
   current_step_id uuid REFERENCES $SCHEMA$.steps(id) ON DELETE SET NULL,
+  adapter_id uuid REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE SET NULL,
+  effective_mode text,
   started_at timestamptz NOT NULL DEFAULT now(),
   completed_at timestamptz,
   cancelled_at timestamptz,
   data jsonb NOT NULL DEFAULT '{}'::jsonb,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   inserted_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT enrollments_effective_mode_chk
+    CHECK (effective_mode IS NULL OR effective_mode IN ('lifecycle', 'outbound')),
+  CONSTRAINT enrollments_outbound_pin_chk
+    CHECK (adapter_id IS NULL OR effective_mode = 'outbound')
 ) WITH (fillfactor = 80, autovacuum_vacuum_scale_factor = 0.05);
 
 --SPLIT--
@@ -238,6 +269,7 @@ CREATE TABLE $SCHEMA$.step_executions (
   payload jsonb,
   response jsonb,
   provider_message_id text,
+  out_message_id text,
   error_message text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   inserted_at timestamptz NOT NULL DEFAULT now(),
@@ -279,6 +311,7 @@ CREATE TABLE $SCHEMA$.suppressions (
 CREATE TABLE $SCHEMA$.message_events (
   id uuid PRIMARY KEY DEFAULT uuidv7(),
   step_execution_id uuid REFERENCES $SCHEMA$.step_executions(id) ON DELETE SET NULL,
+  adapter_id uuid REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE SET NULL,
   tenant_key text,
   channel text NOT NULL,
   provider text NOT NULL,
@@ -286,6 +319,8 @@ CREATE TABLE $SCHEMA$.message_events (
   provider_event_id text,
   event_type $SCHEMA$.message_event_type NOT NULL,
   event_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  in_reply_to text,
+  references_list text[],
   occurred_at timestamptz NOT NULL DEFAULT now(),
   inserted_at timestamptz NOT NULL DEFAULT now()
 ) WITH (fillfactor = 80, autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
@@ -306,6 +341,64 @@ CREATE TABLE $SCHEMA$.short_links (
   inserted_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 ) WITH (fillfactor = 80, autovacuum_vacuum_scale_factor = 0.05);
+
+--SPLIT--
+
+CREATE TABLE $SCHEMA$.adapter_pools (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  tenant_key text,
+  name text NOT NULL,
+  on_pin_unavailable text NOT NULL DEFAULT 'reassign',
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  inserted_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT adapter_pools_tenant_key_nonempty_chk
+    CHECK (tenant_key IS NULL OR length(tenant_key) > 0),
+  CONSTRAINT adapter_pools_on_pin_unavailable_chk
+    CHECK (on_pin_unavailable IN ('pause', 'reassign'))
+);
+
+--SPLIT--
+
+CREATE TABLE $SCHEMA$.adapter_pool_members (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  pool_id uuid NOT NULL REFERENCES $SCHEMA$.adapter_pools(id) ON DELETE CASCADE,
+  adapter_id uuid NOT NULL REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE CASCADE,
+  tenant_key text,
+  class text NOT NULL DEFAULT 'mailbox',
+  weight integer NOT NULL DEFAULT 1,
+  active boolean NOT NULL DEFAULT true,
+  inserted_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT adapter_pool_members_tenant_key_nonempty_chk
+    CHECK (tenant_key IS NULL OR length(tenant_key) > 0),
+  CONSTRAINT adapter_pool_members_class_chk
+    CHECK (class IN ('mailbox', 'esp_api')),
+  CONSTRAINT adapter_pool_members_weight_positive_chk
+    CHECK (weight > 0)
+);
+
+--SPLIT--
+
+CREATE TABLE $SCHEMA$.adapter_sequence_budgets (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  adapter_id uuid NOT NULL REFERENCES $SCHEMA$.channel_adapters(id) ON DELETE CASCADE,
+  sequence_version_id uuid NOT NULL REFERENCES $SCHEMA$.sequence_versions(id) ON DELETE CASCADE,
+  tenant_key text,
+  weight integer NOT NULL DEFAULT 1,
+  max_share_pct integer NOT NULL DEFAULT 100,
+  daily_volume_target integer,
+  inserted_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT adapter_sequence_budgets_tenant_key_nonempty_chk
+    CHECK (tenant_key IS NULL OR length(tenant_key) > 0),
+  CONSTRAINT adapter_sequence_budgets_weight_positive_chk
+    CHECK (weight > 0),
+  CONSTRAINT adapter_sequence_budgets_max_share_pct_range_chk
+    CHECK (max_share_pct BETWEEN 1 AND 100),
+  CONSTRAINT adapter_sequence_budgets_daily_volume_target_positive_chk
+    CHECK (daily_volume_target IS NULL OR daily_volume_target > 0)
+);
 
 --SPLIT--
 
@@ -348,6 +441,20 @@ CREATE UNIQUE INDEX suppressions_global_recipient_idx
 CREATE UNIQUE INDEX short_links_idempotency_key_idx ON $SCHEMA$.short_links (idempotency_key);
 --SPLIT--
 CREATE UNIQUE INDEX message_events_provider_event_idx ON $SCHEMA$.message_events (provider, provider_event_id) WHERE provider_event_id IS NOT NULL;
+--SPLIT--
+CREATE UNIQUE INDEX adapter_pools_tenant_name_idx
+  ON $SCHEMA$.adapter_pools (tenant_key, name)
+  WHERE tenant_key IS NOT NULL;
+--SPLIT--
+CREATE UNIQUE INDEX adapter_pools_global_name_idx
+  ON $SCHEMA$.adapter_pools (name)
+  WHERE tenant_key IS NULL;
+--SPLIT--
+CREATE UNIQUE INDEX adapter_pool_members_pool_adapter_idx
+  ON $SCHEMA$.adapter_pool_members (pool_id, adapter_id);
+--SPLIT--
+CREATE UNIQUE INDEX adapter_sequence_budgets_adapter_sequence_idx
+  ON $SCHEMA$.adapter_sequence_budgets (adapter_id, sequence_version_id);
 
 --SPLIT--
 
@@ -408,6 +515,36 @@ CREATE INDEX message_events_tenant_step_execution_idx
 CREATE INDEX events_tenant_enrollment_idx
   ON $SCHEMA$.events (tenant_key, enrollment_id)
   WHERE enrollment_id IS NOT NULL;
+--SPLIT--
+CREATE INDEX adapter_pool_members_active_pool_idx
+  ON $SCHEMA$.adapter_pool_members (pool_id, weight, adapter_id)
+  WHERE active = true;
+--SPLIT--
+CREATE INDEX adapter_pool_members_tenant_pool_idx
+  ON $SCHEMA$.adapter_pool_members (tenant_key, pool_id);
+--SPLIT--
+CREATE INDEX adapter_sequence_budgets_tenant_idx
+  ON $SCHEMA$.adapter_sequence_budgets (tenant_key, adapter_id, sequence_version_id);
+--SPLIT--
+CREATE INDEX enrollments_tenant_adapter_idx
+  ON $SCHEMA$.enrollments (tenant_key, adapter_id)
+  WHERE adapter_id IS NOT NULL;
+--SPLIT--
+CREATE INDEX enrollments_tenant_effective_mode_idx
+  ON $SCHEMA$.enrollments (tenant_key, effective_mode)
+  WHERE effective_mode IS NOT NULL;
+--SPLIT--
+CREATE UNIQUE INDEX step_executions_out_message_id_idx
+  ON $SCHEMA$.step_executions (out_message_id)
+  WHERE out_message_id IS NOT NULL;
+--SPLIT--
+CREATE INDEX message_events_in_reply_to_idx
+  ON $SCHEMA$.message_events (in_reply_to)
+  WHERE in_reply_to IS NOT NULL;
+--SPLIT--
+CREATE INDEX message_events_adapter_occurred_idx
+  ON $SCHEMA$.message_events (adapter_id, occurred_at)
+  WHERE adapter_id IS NOT NULL;
 
 --SPLIT--
 

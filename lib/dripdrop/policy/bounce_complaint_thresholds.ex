@@ -7,7 +7,7 @@ defmodule DripDrop.Policy.BounceComplaintThresholds do
 
   require Logger
 
-  alias DripDrop.{ChannelAdapter, Clock, DBHelpers, Repo}
+  alias DripDrop.{AdapterHealth, ChannelAdapter, Clock, DBHelpers, Repo}
 
   @schema Application.compile_env(:dripdrop, :schema, "dripdrop")
   @default_interval_ms 60_000
@@ -29,10 +29,16 @@ defmodule DripDrop.Policy.BounceComplaintThresholds do
   """
   @spec check_all() :: {:ok, non_neg_integer()} | {:error, term()}
   def check_all do
-    with {:ok, rows} <- threshold_rows(config()) do
-      rows
-      |> Enum.reduce_while({:ok, 0}, &pause_adapter/2)
+    with {:ok, rows} <- threshold_rows(config()),
+         {:ok, paused_count} <- pause_threshold_adapters(rows),
+         {:ok, _probe_count} <- AdapterHealth.evaluate_probes() do
+      {:ok, paused_count}
     end
+  end
+
+  defp pause_threshold_adapters(rows) do
+    rows
+    |> Enum.reduce_while({:ok, 0}, &pause_adapter/2)
   end
 
   @impl true
@@ -159,15 +165,21 @@ defmodule DripDrop.Policy.BounceComplaintThresholds do
   defp update_paused_until(adapter, stats) do
     paused_until = Clock.seconds_from_now(config(:pause_seconds, @default_pause_seconds))
 
-    config =
-      adapter.config
-      |> Kernel.||(%{})
-      |> Map.put("paused_until", DateTime.to_iso8601(paused_until))
-      |> Map.put("paused_reason", paused_reason(stats))
+    reason = paused_reason(stats)
 
-    adapter
-    |> ChannelAdapter.changeset(%{config: config})
-    |> Repo.update()
+    AdapterHealth.transition(adapter, :resting,
+      manual: true,
+      reason: reason,
+      resting_until: paused_until,
+      config_merge: %{
+        "paused_until" => DateTime.to_iso8601(paused_until),
+        "paused_reason" => reason
+      }
+    )
+    |> case do
+      {:ok, updated, _events} -> {:ok, updated}
+      other -> other
+    end
   end
 
   defp paused_reason(%{complaint_rate: complaint_rate}) do

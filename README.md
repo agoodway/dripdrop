@@ -4,18 +4,21 @@ Backend-first, database-driven messaging sequence engine for Elixir.
 
 DripDrop lets a host app drip multi-step sequences across email, SMS, webhooks, PubSub, Slack, Telegram, and WhatsApp while keeping sequence state, policy decisions, delivery attempts, and provider events in the host database. Schedules dispatch through [PgFlow](https://github.com/agoodway/pgflow) by default, with Oban available for hosts that already run it.
 
-DripDrop is for sequence/drip messaging — onboarding flows, lifecycle nurtures, win-back campaigns. Not for one-off transactional email like password resets.
+DripDrop is for sequence/drip messaging — onboarding flows, lifecycle nurtures,
+win-back campaigns, and optional cold outbound drip. Not for one-off
+transactional email like password resets.
 
 ## What It Does
 
 - Author versioned sequences with steps, timing, transitions, and conditions.
 - Enroll subscribers into active sequence versions.
 - Dispatch due steps through PgFlow (default) or Oban.
-- Render templates with Liquid/Liquex, trusted EEx module templates, and optional MJML email compilation.
+- Render templates with Liquid/Liquex, trusted EEx module templates, optional MJML email compilation, and opt-in deterministic spintax.
 - Evaluate conditions through Predicated, enrollment data, events, Elixir hooks, and HTTP hooks.
 - Send through database-stored channel adapters with encrypted credentials.
 - Apply suppressions, quiet hours, rate limits, bounce/complaint thresholds, optional unsubscribe headers, and explicit sending rules.
 - Normalize inbound provider webhooks into `message_events`.
+- Run cold outbound versions through tenant-scoped sender pools with enrollment-time adapter pinning, ramp caps, min-gap checks, threading headers, and host-fed reply ingestion.
 - Rewrite eligible links through GoodAnalytics, module, webhook, or no-op short-link providers.
 
 ## Why DripDrop?
@@ -36,6 +39,15 @@ Current `dripdrop` tables:
 - `channel_adapters`, `http_hooks`
 - `enrollments`, `step_executions`, `events`
 - `suppressions`, `message_events`, `short_links`
+- `adapter_pools`, `adapter_pool_members`, `adapter_sequence_budgets`
+
+Lifecycle sequences use the existing adapter-selection chain: explicit step
+adapter, step or sequence rotation, tenant default, then global default. Cold
+outbound sequences opt into `sequence_versions.mode = "outbound"` and resolve
+senders through an adapter pool once at enrollment time. The selected adapter is
+pinned on `enrollments.adapter_id`, and outbound-only gates enforce health,
+ramp caps, per-sequence sub-caps, min-gap timing, and email threading headers.
+Lifecycle rows leave the new fields unset and keep the foundation dispatch flow.
 
 Tenant scoping is represented by `tenant_key`. Query helpers that could leak tenant data require an explicit tenant scope; pass `tenant_key: nil` when intentionally querying global records. Deprecated unscoped helpers raise.
 
@@ -173,6 +185,43 @@ end
 })
 ```
 
+### Cold Outbound Mode
+
+Cold outbound is opt-in per sequence version. Lifecycle behavior stays the
+default. To send a prospect drip from the same mailbox across every step, create
+an adapter pool, add mailbox or ESP members, and set the sequence version to
+`mode: :outbound` with `config["pool_id"]`.
+
+```elixir
+{:ok, pool} =
+  DripDrop.create_adapter_pool(%{
+    tenant_key: "acct_123",
+    name: "sales_pool",
+    on_pin_unavailable: :pause
+  })
+
+{:ok, _member} =
+  DripDrop.add_pool_member(pool.id, %{
+    adapter_id: adapter.id,
+    class: :mailbox,
+    weight: 1
+  })
+
+{:ok, version} =
+  DripDrop.create_sequence_version(sequence.id, %{
+    version: 2,
+    mode: :outbound,
+    config: %{"pool_id" => pool.id}
+  })
+```
+
+Outbound enrollments store the selected sender in `enrollments.adapter_id`.
+Follow-up email steps generate `Message-ID`, `In-Reply-To`, and `References`
+headers for threading. Hosts that receive replies through IMAP, Microsoft Graph,
+or Gmail API watch should normalize those messages and call
+`DripDrop.ingest_inbound_message/2`. See
+[`guides/cold_outbound.md`](guides/cold_outbound.md).
+
 ## Channels
 
 Built-in channel providers:
@@ -231,6 +280,19 @@ DripDrop.suppress(attrs)
 DripDrop.replay(step_execution_id)
 DripDrop.webhook_routes()
 DripDrop.startup_check()
+
+# Cold outbound (optional)
+DripDrop.create_adapter_pool(attrs)
+DripDrop.update_adapter_pool(pool, attrs)
+DripDrop.delete_adapter_pool(pool_id, opts)
+DripDrop.list_adapter_pools(%{tenant_key: tenant_key})
+DripDrop.add_pool_member(pool_id, attrs)
+DripDrop.remove_pool_member(member_id, tenant_key)
+DripDrop.list_pool_members(pool_id)
+DripDrop.set_adapter_health(adapter_id, attrs)
+DripDrop.set_adapter_sequence_budget(adapter_id, sequence_version_id, attrs)
+DripDrop.repin_enrollment(enrollment_id, adapter_id, opts)
+DripDrop.ingest_inbound_message(adapter_id_or_scope, normalized_message)
 ```
 
 Deprecated unscoped helpers raise — pass an explicit `tenant_key` (use `nil` for global records).
@@ -299,8 +361,20 @@ In-depth documentation lives in the project guides:
 - [`quiet_hours.md`](guides/quiet_hours.md) — per-tenant quiet hours
 - [`short_links.md`](guides/short_links.md) — link rewriting and providers
 - [`oauth_providers.md`](guides/oauth_providers.md) — Gmail and MS365 token callbacks
+- [`cold_outbound.md`](guides/cold_outbound.md) — sender pools, ramping, threading, inbound replies
 - [`operations.md`](guides/operations.md) — replay, suppression, observability
 - [`extending.md`](guides/extending.md) — custom channels and short-link adapters
+
+## Changelog
+
+### Unreleased
+
+- Added optional cold outbound mode with adapter pools, enrollment-time sender
+  pinning, adapter health/ramp controls, min-gap enforcement, per-sequence
+  sub-caps, outbound Message-ID threading, host-callable inbound reply
+  ingestion, and deterministic spintax.
+- Updated the initial V01 schema to include cold outbound tables and columns.
+  DripDrop is still pre-production, so no separate V02 migration is maintained.
 
 ## License
 

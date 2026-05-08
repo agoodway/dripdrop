@@ -7,6 +7,9 @@ defmodule DripDrop.Fixtures do
   """
 
   alias DripDrop.{
+    AdapterPool,
+    AdapterPoolMember,
+    AdapterSequenceBudget,
     ChannelAdapter,
     Enrollment,
     HttpHook,
@@ -168,6 +171,79 @@ defmodule DripDrop.Fixtures do
   end
 
   @doc """
+  Inserts an adapter pool.
+  """
+  @spec adapter_pool_fixture(map()) :: Ecto.Schema.t()
+  def adapter_pool_fixture(attrs \\ %{}) do
+    attrs =
+      Map.merge(
+        %{
+          tenant_key: "tenant-a",
+          name: unique_key("pool"),
+          on_pin_unavailable: :pause,
+          metadata: %{}
+        },
+        attrs
+      )
+
+    %AdapterPool{}
+    |> AdapterPool.changeset(attrs)
+    |> TestRepo.insert!()
+  end
+
+  @doc """
+  Inserts an adapter pool member.
+  """
+  @spec adapter_pool_member_fixture(Ecto.Schema.t(), Ecto.Schema.t(), map()) :: Ecto.Schema.t()
+  def adapter_pool_member_fixture(
+        %AdapterPool{} = pool,
+        %ChannelAdapter{} = adapter,
+        attrs \\ %{}
+      ) do
+    attrs =
+      Map.merge(
+        %{
+          pool_id: pool.id,
+          adapter_id: adapter.id,
+          class: :mailbox,
+          weight: 1,
+          active: true
+        },
+        attrs
+      )
+
+    %AdapterPoolMember{}
+    |> AdapterPoolMember.changeset(attrs)
+    |> TestRepo.insert!()
+  end
+
+  @doc """
+  Inserts an adapter sequence budget.
+  """
+  @spec adapter_sequence_budget_fixture(Ecto.Schema.t(), Ecto.Schema.t(), map()) ::
+          Ecto.Schema.t()
+  def adapter_sequence_budget_fixture(
+        %ChannelAdapter{} = adapter,
+        %SequenceVersion{} = version,
+        attrs \\ %{}
+      ) do
+    attrs =
+      Map.merge(
+        %{
+          adapter_id: adapter.id,
+          sequence_version_id: version.id,
+          weight: 1,
+          max_share_pct: 100
+        },
+        attrs
+      )
+
+    %AdapterSequenceBudget{}
+    |> AdapterSequenceBudget.changeset(attrs)
+    |> TestRepo.insert!()
+  end
+
+  @doc """
   Inserts an HTTP hook for a sequence.
   """
   @spec http_hook_fixture(Ecto.UUID.t(), map()) :: Ecto.Schema.t()
@@ -213,10 +289,20 @@ defmodule DripDrop.Fixtures do
         },
         attrs
       )
+      |> derive_adapter_id_from_event_data()
 
     %MessageEvent{}
     |> MessageEvent.changeset(attrs)
     |> TestRepo.insert!()
+  end
+
+  defp derive_adapter_id_from_event_data(%{adapter_id: id} = attrs) when not is_nil(id), do: attrs
+
+  defp derive_adapter_id_from_event_data(attrs) do
+    case get_in(attrs, [:event_data, "adapter_id"]) || get_in(attrs, [:event_data, :adapter_id]) do
+      id when is_binary(id) -> Map.put(attrs, :adapter_id, id)
+      _missing -> attrs
+    end
   end
 
   defp unique_key(prefix) do
