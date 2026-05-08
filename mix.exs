@@ -137,7 +137,17 @@ defmodule DripDrop.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md"],
+      extras: [
+        "README.md",
+        "guides/installation.md",
+        "guides/sending_rules.md",
+        "guides/lifecycle_email.md",
+        "guides/quiet_hours.md",
+        "guides/short_links.md",
+        "guides/oauth_providers.md",
+        "guides/operations.md",
+        "guides/extending.md"
+      ],
       source_ref: "v#{@version}"
     ]
   end

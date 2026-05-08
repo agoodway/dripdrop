@@ -207,6 +207,34 @@ defmodule DripDrop.Helpers do
   end
 
   @doc """
+  Extracts the recipient domain from a value. Accepts either a payload-like
+  map with `to`/`recipient` keys (string or atom) or a plain email-like
+  string. Returns the lowercased domain part, or `nil` when no email-shaped
+  value is present.
+
+  Mirrors the sender-side extraction (`email_domain/1` invoked against a
+  `from`/`reply_to` field) for the recipient side, used by the
+  per-recipient-domain rate-limit scope to bucket sends by recipient ISP.
+  """
+  @spec recipient_domain(term()) :: binary() | nil
+  def recipient_domain(nil), do: nil
+
+  def recipient_domain(value) when is_map(value) do
+    value
+    |> recipient_address()
+    |> email_domain()
+  end
+
+  def recipient_domain(value), do: email_domain(value)
+
+  defp recipient_address(payload) do
+    Map.get(payload, :to) ||
+      Map.get(payload, "to") ||
+      Map.get(payload, :recipient) ||
+      Map.get(payload, "recipient")
+  end
+
+  @doc """
   Calculates the next scheduled timestamp for a timing struct.
   """
   @spec scheduled_for(Ecto.Schema.t()) :: DateTime.t()

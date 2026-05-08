@@ -114,6 +114,14 @@ defmodule DripDrop.Policy.RateLimit.Postgres do
     }
   end
 
+  defp scope_filters(:recipient_domain, target) do
+    {
+      "AND channel = $6::text AND event_data->>'recipient_domain' = $7::text",
+      "AND channel = $6::text AND metadata->>'rate_limit_recipient_domain' = $7::text",
+      [target.channel, target.recipient_domain]
+    }
+  end
+
   defp scope_filters(:recipient, target) do
     {
       "AND channel = $6::text AND event_data->>'recipient' = $7::text",

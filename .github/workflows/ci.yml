@@ -14,13 +14,17 @@ jobs:
       matrix:
         cron: [with-cron, no-cron]
         command: [quality, test, dialyzer]
+        include:
+          - cron: with-cron
+            command: test --only integration
+    continue-on-error: ${{ matrix.command == 'test --only integration' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Postgres image with pgmq + pg_cron
         if: matrix.cron == 'with-cron'
-        run: docker build -t dripdrop-postgres:ci .
+        run: docker build -t dripdrop-postgres:ci -f database/Dockerfile.postgres database
 
       - name: Start Postgres with pg_cron
         if: matrix.cron == 'with-cron'

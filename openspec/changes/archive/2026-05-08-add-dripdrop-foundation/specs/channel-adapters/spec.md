@@ -115,6 +115,10 @@ The system SHALL support weighted rotation across multiple adapters for a single
 - **WHEN** a step is configured for rotation across `[mailgun:70, sendgrid:30]` and the first attempt selected SendGrid
 - **THEN** the retry of the same `step_execution_id` selects SendGrid again rather than re-rolling.
 
+#### Scenario: Different step executions in the same enrollment select independently
+- **WHEN** an enrollment has executed step 1 on adapter SendGrid (chosen via rotation) and step 2 is dispatched for the same enrollment with the same rotation configuration
+- **THEN** step 2 receives a fresh `step_execution_id` and rotation re-rolls independently — step 2 MAY select Mailgun even though step 1 used SendGrid. This is the documented lifecycle behavior; sequences that require a single sender per recipient (for thread continuity, deliverability reputation, or other reasons) MUST configure that explicitly through other capabilities rather than relying on rotation determinism.
+
 ### Requirement: Adapters May Expose Provider-Specific Webhook Routes
 
 Each channel adapter SHALL declare zero or more inbound webhook routes via `DripDrop.Channel.webhook_routes/1`, returning a list of `{method, path_suffix, handler}` tuples that the host app mounts. The handler SHALL parse provider events into a normalized shape consumed by the `event-ingestion` capability.

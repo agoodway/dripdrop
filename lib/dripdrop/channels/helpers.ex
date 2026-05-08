@@ -76,9 +76,12 @@ defmodule DripDrop.Channels.Helpers do
       |> adapter_config()
       |> fetch_key(:req_options, [])
 
-    :dripdrop
-    |> Application.get_env(:channel_req_options, [])
-    |> Keyword.merge(List.wrap(adapter_options))
+    global_options =
+      :dripdrop
+      |> Application.get_env(:channel_req_options)
+      |> List.wrap()
+
+    Keyword.merge(global_options, List.wrap(adapter_options))
   end
 
   @doc """

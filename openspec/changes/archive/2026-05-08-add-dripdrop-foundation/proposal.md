@@ -15,9 +15,9 @@ Elixir applications that need behavioral, multi-step messaging across email, SMS
 - Messaging policy as a first-class concern: suppressions, consent, RFC 8058 one-click unsubscribe headers, quiet hours / timezone awareness, per-adapter / per-domain / per-recipient rate limits, bounce/complaint thresholds (≤0.3 % complaint, ≤2 % bounce on 30-day rolling).
 - Event ingestion: normalized provider webhook intake into `message_events`, with auto-suppression on bounce/complaint/unsubscribe.
 - Optional multi-tenancy via `tenant_key` scoping that is honored by every capability when present.
-- A single `demo/` Phoenix LiveView application living next to the library (path-dep on `..`), three scenario LiveViews mirroring the README examples (Onboarding, Lead Nurture, Multi-Channel Trial), a simple **read-only** in-app dashboard (sequences/enrollments/executions/recent message events), a top-level `Dockerfile` + `docker-compose.yml` mirroring `pgflow`'s setup (Postgres 18 + pgmq + pg_cron pre-installed), and `mix demo.seed` fixtures.
+- Top-level `Dockerfile` + `docker-compose.yml` mirroring `pgflow`'s setup (Postgres 18 + pgmq + pg_cron pre-installed) used by the library's own CI/dev workflow; demo applications and host apps adopt them as needed.
 - Mix tooling that mirrors pgflow's posture: `mix dripdrop.setup` (wraps schema migration; accepts `--no-cron`), `mix dripdrop.check_schema` (verify migrations are applied), `mix dripdrop.uninstall`. Quality tooling alias `mix quality` running `compile --warnings-as-errors`, `deps.unlock --unused`, `format --check-formatted`, `sobelow`, `ex_dna`, `doctor`, `credo --strict`. Cloak key rotation is intentionally NOT shipped as a Mix task — hosts use Cloak's standard rotation flow in their own scripts.
-- **NOT in this change** (deferred to follow-on changes): a full editable LiveView dashboard (the demo's read-only views are the placeholder), AI template builder, advanced retention/redaction policies, pgflow alternative scheduler beyond the Oban shim.
+- **NOT in this change** (deferred to follow-on changes): the Phoenix demo application (own change `add-dripdrop-demo-app`), a full editable LiveView dashboard (`add-dripdrop-dashboard`), AI template builder, advanced retention/redaction policies, pgflow alternative scheduler beyond the Oban shim.
 
 ## Capabilities
 
@@ -32,7 +32,6 @@ Elixir applications that need behavioral, multi-step messaging across email, SMS
 - `short-links`: `DripDrop.ShortLinks.Adapter` behavior with built-in providers (GoodAnalytics, Module, Webhook, None). Post-render pipeline: extract eligible URLs, enrich with UTM/tracking, idempotently create short links keyed by `(execution, original, destination, provider, config)`, rewrite HTML and text safely, persist `short_links` rows.
 - `messaging-policy`: Suppression and consent gating (per channel + normalized recipient), optional RFC 8058 List-Unsubscribe / List-Unsubscribe-Post headers, quiet-hours and timezone enforcement (TCPA 8 AM–9 PM recipient-local for SMS), per-adapter / per-provider / per-domain / per-recipient rate limits, bounce/complaint thresholds with auto-suppression, explicit sending-rule controls, audit snapshots.
 - `event-ingestion`: Normalized provider webhook intake (`Plug` + adapter callbacks) into `message_events`, mapping bounces/complaints/unsubscribes to suppressions and optionally pausing/cancelling enrollments. Reply detection where adapter supports it.
-- `demo-app`: A `demo/` Phoenix 1.8 + LiveView application that consumes `:dripdrop` as a path dep and exercises the library end-to-end. Ships the three README scenarios as scenario LiveViews, a simple read-only in-app dashboard (sequences / enrollments / executions / recent message events), a `mix demo.seed` task, plus the top-level Postgres-with-extensions Docker image and `docker-compose.yml` mirroring pgflow's posture.
 
 ### Modified Capabilities
 
@@ -40,11 +39,11 @@ Elixir applications that need behavioral, multi-step messaging across email, SMS
 
 ## Impact
 
-- **Code**: New library at `lib/dripdrop/**`, new tests at `test/dripdrop/**`, mix tasks under `lib/mix/tasks/dripdrop.*`. New `demo/` Phoenix LiveView app at the repo root (path-dep on `..`).
+- **Code**: New library at `lib/dripdrop/**`, new tests at `test/dripdrop/**`, mix tasks under `lib/mix/tasks/dripdrop.*`. The Phoenix demo application at `demo/` is authored by the follow-on change `add-dripdrop-demo-app`.
 - **APIs**: Top-level `DripDrop.*` public API (sequences, adapters, hooks, enrollment, events). Behaviors: `DripDrop.Channel`, `DripDrop.HookBehavior`, `DripDrop.Scheduler`, `DripDrop.ShortLinks.Adapter`.
 - **Database**: Owned schema `dripdrop` (created by `ecto_evolver` versioned migration `V01`); host app must run `pgflow`'s `gen.postgres_extensions_migration` and `gen.pgmq_migration` first (or run with `--no-cron` for hosts without pg_cron). Tracking object: `dripdrop.dripdrop_version` view.
 - **Dependencies**: hard — `ecto`, `ecto_sql`, `postgrex`, `pgflow`, `ecto_evolver`, `crontab`, `cloak_ecto`, `req`, `jason`, `plug`, `floki`, `liquex`, `nebulex`, `nebulex_local`, `standard_webhooks`. Optional — `swoosh` + `finch`, `mjml`, `phoenix_pubsub`, `oban`, `ex_aws_sns`, `ex_gram`, `whatsapp_sdk`. Quality (dev/test only) — `credo`, `dialyxir`, `sobelow`, `doctor`, `ex_dna`. Future-optional — `req_llm`, `zoi`, `phoenix_live_view` (full dashboard change).
-- **Repo-root assets**: `Dockerfile` and `docker-compose.yml` shipping a Postgres 18 image with pg_cron preloaded; pgmq and pgflow are installed through PgFlow-generated migrations. Used both by the demo app and by CI.
+- **Repo-root assets**: `Dockerfile` and `docker-compose.yml` shipping a Postgres 18 image with pg_cron preloaded; pgmq and pgflow are installed through PgFlow-generated migrations. Used by library CI and (in the follow-on `add-dripdrop-demo-app` change) by the demo.
 - **Host-app responsibilities**: provide a `Repo`, run `mix dripdrop.setup`, configure `DRIPDROP_ENCRYPTION_KEY`, register a host PgFlow with `DripDrop.Jobs.DispatchStep`, configure SPF/DKIM/DMARC for any sending domains, mount `DripDrop.Web.Router.dripdrop_webhooks/1`, supply `unsubscribe_url_builder`.
 - **Operational**: New worker pool (PgFlow-managed), new webhook ingest endpoint, audit log retention on `message_events` and rendered payload snapshots.
 - **Out of scope for this change**: full editable dashboard UI, AI template generation, fine-grained retention/redaction config, multi-region replication.

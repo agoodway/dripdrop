@@ -4,6 +4,7 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
   import ExUnit.CaptureLog
 
   alias DripDrop.Policy.{
+    AdapterPause,
     BounceComplaintThresholds,
     Gate,
     QuietHours,
@@ -387,6 +388,113 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       assert execution.metadata["rate_limit_adapter_id"] == adapter.id
     end
 
+    test "defers when the recipient-domain bucket has reached its limit" do
+      attach_telemetry([:dripdrop, :policy, :rate_limited])
+
+      adapter = Fixtures.channel_adapter_fixture()
+
+      {step, execution} =
+        execution_fixture_with_step(%{"rate_limits" => %{"recipient_domain" => "1/1h"}})
+
+      execution =
+        TestRepo.update!(StepExecution.changeset(execution, %{recipient: "ada@gmail.com"}))
+
+      Fixtures.message_event_fixture(%{
+        tenant_key: "tenant-a",
+        channel: adapter.channel,
+        provider: adapter.provider,
+        event_data: %{"recipient_domain" => "gmail.com"},
+        occurred_at: DateTime.add(DateTime.utc_now(:second), -60, :second)
+      })
+
+      context = policy_context(step: step, execution: execution)
+
+      assert {:defer, %DateTime{} = defer_until, metadata} =
+               RateLimit.check(context, %{from: "team@example.com"}, adapter)
+
+      assert metadata.reason == "rate_limit"
+      assert metadata.scope == "recipient_domain"
+      assert metadata.key == "email:gmail.com"
+      assert metadata.limit == 1
+      assert metadata.used == 1
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :rate_limited], %{count: 1},
+                      %{scope: "recipient_domain", defer_until: ^defer_until}}
+    end
+
+    test "recipient-domain scope skips when no email-shaped recipient is present" do
+      adapter =
+        Fixtures.channel_adapter_fixture(%{
+          channel: "sms",
+          provider: "twilio",
+          credentials: %{
+            "account_sid" => "AC123",
+            "auth_token" => "secret",
+            "from" => "+15551234567"
+          }
+        })
+
+      {step, execution} =
+        execution_fixture_with_step(%{"rate_limits" => %{"recipient_domain" => "1/1h"}})
+
+      execution =
+        TestRepo.update!(
+          StepExecution.changeset(execution, %{recipient: "+15551234567", channel: "sms"})
+        )
+
+      step = %{step | channel: "sms"}
+
+      context = policy_context(step: step, execution: execution)
+
+      # No prior events, no domain extractable from a phone number — bucket
+      # is silently skipped and dispatch proceeds.
+      assert :ok = RateLimit.check(context, %{from: "team@example.com"}, adapter)
+    end
+
+    test "recipient-domain hits do not double-count against the per-recipient bucket" do
+      attach_telemetry([:dripdrop, :policy, :rate_limited])
+
+      adapter = Fixtures.channel_adapter_fixture()
+
+      {step, execution} =
+        execution_fixture_with_step(%{
+          "rate_limits" => %{
+            "recipient_domain" => "1/1h",
+            "recipient" => "5/1h"
+          }
+        })
+
+      execution =
+        TestRepo.update!(StepExecution.changeset(execution, %{recipient: "ada@gmail.com"}))
+
+      Fixtures.message_event_fixture(%{
+        tenant_key: "tenant-a",
+        channel: adapter.channel,
+        provider: adapter.provider,
+        event_data: %{
+          "recipient_domain" => "gmail.com",
+          "recipient" => "other@gmail.com"
+        },
+        occurred_at: DateTime.add(DateTime.utc_now(:second), -60, :second)
+      })
+
+      context = policy_context(step: step, execution: execution)
+
+      assert {:defer, %DateTime{}, metadata} =
+               RateLimit.check(context, %{from: "team@example.com"}, adapter)
+
+      # Only the recipient_domain scope should hit (one prior event for
+      # gmail.com, no prior events for the specific recipient
+      # ada@gmail.com).
+      assert metadata.scope == "recipient_domain"
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :rate_limited], %{count: 1},
+                      %{scope: "recipient_domain"}}
+
+      refute_receive {:telemetry, [:dripdrop, :policy, :rate_limited], %{count: 1},
+                      %{scope: "recipient"}}
+    end
+
     test "tracks recipient, provider, and sender-domain buckets independently" do
       attach_telemetry([:dripdrop, :policy, :rate_limited])
 
@@ -494,6 +602,71 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
 
       adapter = TestRepo.get!(ChannelAdapter, adapter.id)
       refute Map.has_key?(adapter.config || %{}, "paused_until")
+    end
+  end
+
+  describe "adapter pause enforcement" do
+    test "defers dispatch when paused_until is in the future and emits telemetry" do
+      attach_telemetry([:dripdrop, :policy, :adapter_paused])
+
+      paused_until = DateTime.add(DateTime.utc_now(:second), 3600, :second)
+      paused_until_iso = DateTime.to_iso8601(paused_until)
+
+      adapter =
+        adapter(
+          id: Ecto.UUID.generate(),
+          config: %{
+            "paused_until" => paused_until_iso,
+            "paused_reason" => "complaint_threshold"
+          }
+        )
+
+      context = policy_context([])
+
+      assert {:defer, ^paused_until, metadata} = AdapterPause.check(context, adapter)
+      assert metadata.reason == "adapter_paused"
+      assert metadata.paused_reason == "complaint_threshold"
+      assert metadata.adapter_id == adapter.id
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :adapter_paused], %{count: 1},
+                      %{
+                        adapter_id: adapter_id,
+                        paused_reason: "complaint_threshold",
+                        paused_until: ^paused_until
+                      }}
+
+      assert adapter_id == adapter.id
+    end
+
+    test "permits dispatch when paused_until is in the past" do
+      paused_until = DateTime.add(DateTime.utc_now(:second), -3600, :second)
+      paused_until_iso = DateTime.to_iso8601(paused_until)
+
+      adapter =
+        adapter(
+          config: %{
+            "paused_until" => paused_until_iso,
+            "paused_reason" => "complaint_threshold"
+          }
+        )
+
+      assert :ok = AdapterPause.check(policy_context([]), adapter)
+    end
+
+    test "permits dispatch when adapter has no paused_until" do
+      assert :ok = AdapterPause.check(policy_context([]), adapter())
+      assert :ok = AdapterPause.check(policy_context([]), adapter(config: %{"other" => "value"}))
+    end
+
+    test "permits dispatch and emits parse warning for malformed paused_until" do
+      attach_telemetry([:dripdrop, :policy, :adapter_paused, :parse_warning])
+
+      adapter = adapter(config: %{"paused_until" => "not-a-real-iso-timestamp"})
+
+      assert :ok = AdapterPause.check(policy_context([]), adapter)
+
+      assert_receive {:telemetry, [:dripdrop, :policy, :adapter_paused, :parse_warning],
+                      %{count: 1}, %{adapter_id: _, raw_value: "not-a-real-iso-timestamp"}}
     end
   end
 

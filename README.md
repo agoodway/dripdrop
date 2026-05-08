@@ -67,9 +67,23 @@ Then fetch dependencies:
 mix deps.get
 ```
 
+For the full host-app setup, including scheduler migrations, runtime
+configuration, schema checks, and webhook mounting, see
+[`guides/installation.md`](guides/installation.md).
+
 ## Quick Start
 
-### 1. Configure DripDrop
+The minimum host-app setup is:
+
+1. Configure DripDrop with your Ecto repo, scheduler, and channel settings.
+2. Generate PgFlow migrations first, then the DripDrop wrapper migration.
+3. Run `mix ecto.migrate`.
+4. Call `DripDrop.startup_check/0` during boot after the repo and scheduler are started.
+5. Mount provider webhooks if you use webhook-delivering providers.
+
+The canonical installation walkthrough lives in
+[`guides/installation.md`](guides/installation.md). This README keeps the main
+runtime shape visible:
 
 ```elixir
 # config/config.exs
@@ -84,20 +98,7 @@ config :dripdrop, :pgflow,
   jobs: [DripDrop.Jobs.DispatchStep, DripDrop.Jobs.CronTick]
 ```
 
-Set `DRIPDROP_ENCRYPTION_KEY` to a base64-encoded 32-byte key before boot.
-
-For host apps that already run Oban, use the Oban scheduler instead and configure a `:dripdrop` queue in your Oban supervision tree:
-
-```elixir
-config :dripdrop, scheduler: DripDrop.Schedulers.Oban
-```
-
-### 2. Generate Migrations
-
-PgFlow is the recommended scheduler. Generate its migrations first, then DripDrop's:
-
 ```bash
-# PgFlow setup (skip if Oban scheduler)
 mix pgflow.gen.postgres_extensions_migration   # add --no-cron if pg_cron unavailable
 mix pgflow.gen.pgmq_migration
 mix pgflow.setup
@@ -110,11 +111,9 @@ mix dripdrop.setup --repo MyApp.Repo
 mix ecto.migrate
 ```
 
-For hosts without `pg_cron`, generate PgFlow extensions with `--no-cron` and include `DripDrop.Jobs.CronTick` in the configured PgFlow job list.
-
-### 3. Validate at Boot
-
-Call `DripDrop.startup_check/0` in your host `Application.start/2` callback after the Repo, scheduler supervisor, and channel registrations are configured. It catches missing optional deps, invalid encryption config, and scheduler registration issues:
+Set `DRIPDROP_ENCRYPTION_KEY` to a base64-encoded 32-byte key before boot.
+Call `DripDrop.startup_check/0` in your host `Application.start/2` callback
+after the Repo, scheduler supervisor, and channel registrations are configured:
 
 ```elixir
 def start(_type, _args) do
@@ -127,9 +126,7 @@ def start(_type, _args) do
 end
 ```
 
-### 4. Mount Provider Webhooks
-
-In a Phoenix router:
+Mount provider webhooks in a Phoenix router when needed:
 
 ```elixir
 import DripDrop.Web.Router
@@ -139,9 +136,7 @@ scope "/" do
 end
 ```
 
-Inbound routes are registered for Mailgun, SendGrid, Postmark, MailerSend, SES, and Twilio. Verification happens in `DripDrop.Web.WebhookPlug`. Providers without delivery webhooks (Gmail, MS365, SMTP, PubSub, Slack, Telegram) treat a successful send as the terminal positive signal.
-
-### 5. Author and Run a Sequence
+### Author and Run a Sequence
 
 ```elixir
 # Create a channel adapter (credentials are encrypted at rest)
@@ -278,6 +273,13 @@ Run the test suite:
 mix test
 ```
 
+Integration tests exercise the real PgFlow scheduler and are excluded from the
+default test run:
+
+```bash
+mix test --only integration
+```
+
 Quality gates used by this repo:
 
 ```bash
@@ -289,7 +291,7 @@ CI runs the suite under Postgres 18 both with and without `pg_cron`.
 
 ## Guides
 
-In-depth documentation lives in [`guides/`](guides/):
+In-depth documentation lives in the project guides:
 
 - [`installation.md`](guides/installation.md) — full installation reference
 - [`sending_rules.md`](guides/sending_rules.md) — suppressions, rate limits, thresholds

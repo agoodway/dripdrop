@@ -25,7 +25,7 @@ defmodule DripDrop.Hooks.URLGuardTest do
 
     test "allows http when explicitly opted in" do
       Application.put_env(:dripdrop, :http_hook_allow_http, true)
-      assert :ok = URLGuard.validate("http://example.com/path")
+      assert :ok = URLGuard.validate("http://1.1.1.1/path")
     end
 
     test "rejects ftp, file, and javascript schemes" do
@@ -99,18 +99,6 @@ defmodule DripDrop.Hooks.URLGuardTest do
   end
 
   describe "public hosts" do
-    test "accepts well-known DNS-resolvable hostnames" do
-      # These tests skip if DNS isn't available in the CI environment.
-      case :inet.getaddrs(~c"one.one.one.one", :inet) do
-        {:ok, _addrs} ->
-          assert :ok = URLGuard.validate("https://one.one.one.one/")
-
-        {:error, _} ->
-          # Sandbox without DNS — skip this assertion silently.
-          :ok
-      end
-    end
-
     test "accepts a public IP literal" do
       assert :ok = URLGuard.validate("https://1.1.1.1/")
       assert :ok = URLGuard.validate("https://8.8.8.8/")

@@ -116,11 +116,13 @@ Future-optional: `phoenix_live_view` (full editable dashboard in a follow-on cha
 
 A capability fails compile (or boot) loudly when its optional dep is missing — see `DripDrop.startup_check/0` in tasks.md. **Why:** silent runtime failures (e.g., MJML compile error two weeks after deploy) are the worst kind. **Alternative:** make every provider dependency hard. Rejected — host apps that don't use a channel shouldn't pull that provider's transitive surface.
 
-### D18. Demo lives at `demo/`, mirrors the pgflow pattern, ships docker setup at the repo root
+### D18. Repo-root Docker setup mirrors pgflow's posture
 
-Structure: `demo/` is a sibling Phoenix 1.8 + LiveView 1.1 app with `{:dripdrop, path: ".."}`. The repo root carries a `Dockerfile` (Postgres 18 + pg_cron preloaded) and a `docker-compose.yml` exposing the `db` service. pgmq and pgflow are installed through PgFlow-generated migrations, matching how host apps adopt PgFlow. **Why one app instead of three:** a single demo means one Postgres image, one CI matrix, one set of seeds, and one place to wire the dispatch worker, ingest plug, and dashboard side-by-side. **Why a read-only dashboard inside the demo:** the editable dashboard is deferred to `add-dripdrop-dashboard`, but operators still need to see what's happening in their fixture data — read-only LiveViews give us 80% of the visibility for 5% of the surface area, and they can be migrated to the full dashboard later by promoting the views into a router macro. **Trade-off:** the demo can drift toward kitchen-sink. Mitigation — every scenario lives in its own `lib/dripdrop_demo_web/live/scenarios/<name>/` module with no shared business logic, and `mix demo.seed` is the only sanctioned way to load fixtures.
+The repo root ships a `Dockerfile` (Postgres 18 + pg_cron preloaded) and `docker-compose.yml` exposing a single `db` service. pgmq and pgflow are installed through PgFlow-generated migrations, matching how host apps adopt PgFlow. The library's own CI uses these for its test matrix; the follow-on `add-dripdrop-demo-app` change reuses them for the demo app. **Why ship them in foundation:** the library's own integration tests benefit from a single canonical Postgres image and avoid CI-specific service-container drift.
 
 Mix tooling parallels pgflow's: DripDrop ships `mix dripdrop.setup` (with `--no-cron` to align with pgflow), `mix dripdrop.check_schema`, and `mix dripdrop.uninstall`. We do NOT ship `dripdrop.gen.pgmq_migration` or `dripdrop.gen.postgres_extensions_migration` — those are pgflow's responsibility and DripDrop just runs after them. Cloak key rotation is also not shipped as a Mix task; hosts use Cloak's standard rotation flow in their own scripts.
+
+The Phoenix demo application is intentionally NOT part of foundation. It was originally scoped here as the `demo-app` capability but has been extracted into `add-dripdrop-demo-app` so the library can ship `v0.1.0` independently. Foundation tasks 1.7 and 1.8 (which authored the Docker assets) remain — those are library infrastructure, not demo work.
 
 ## Risks / Trade-offs
 

@@ -201,6 +201,47 @@ defmodule DripDrop.ChannelAdaptersTest do
       assert selected.id in [first.id, second.id]
     end
 
+    test "rotation re-rolls independently across step executions in the same enrollment" do
+      first = Fixtures.channel_adapter_fixture(%{tenant_key: "tenant-a", name: "First"})
+      second = Fixtures.channel_adapter_fixture(%{tenant_key: "tenant-a", name: "Second"})
+
+      step = %{
+        channel: "email",
+        tenant_key: "tenant-a",
+        channel_adapter_id: nil,
+        config: %{
+          "channel_adapter_rotation" => [
+            %{"adapter_id" => first.id, "weight" => 50},
+            %{"adapter_id" => second.id, "weight" => 50}
+          ]
+        }
+      }
+
+      sequence = %{metadata: %{}}
+
+      # Across many fresh step_execution_ids — representing different steps
+      # in the same enrollment, or the same step across many enrollments —
+      # selection re-rolls independently. Both adapters should receive
+      # hits; the distribution is not pinned to a single adapter.
+      picks =
+        for _trial <- 1..100 do
+          execution = %{id: Ecto.UUID.generate()}
+          {:ok, adapter} = ChannelAdapters.select(step, sequence, execution)
+          adapter.id
+        end
+
+      first_count = Enum.count(picks, &(&1 == first.id))
+      second_count = Enum.count(picks, &(&1 == second.id))
+
+      assert first_count > 0,
+             "expected first adapter to receive some picks across 100 trials"
+
+      assert second_count > 0,
+             "expected second adapter to receive some picks across 100 trials"
+
+      assert first_count + second_count == 100
+    end
+
     test "returns a permanent no-adapter error when no adapter is available" do
       step = %{channel: "email", tenant_key: "tenant-a", channel_adapter_id: nil, config: %{}}
       sequence = %{metadata: %{}}

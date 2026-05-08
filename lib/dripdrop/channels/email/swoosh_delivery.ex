@@ -44,6 +44,7 @@ defmodule DripDrop.Channels.Email.SwooshDelivery do
 
   defp email(payload, enrollment, adapter) do
     new()
+    |> put_private(:client_options, Helpers.request_options(adapter))
     |> from(mailbox(Map.get(payload, :from) || Helpers.credential(adapter, :from)))
     |> to(recipients(Map.get(payload, :to) || Helpers.recipient(enrollment, payload, :email)))
     |> put_optional(:reply_to, mailbox(Map.get(payload, :reply_to)))

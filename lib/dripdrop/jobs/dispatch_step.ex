@@ -10,6 +10,7 @@ defmodule DripDrop.Jobs.DispatchStep do
   alias DripDrop.Dispatch.Concurrency
   alias DripDrop.Dispatch.Steps, as: DispatchSteps
   alias DripDrop.Hooks.Evaluator
+  alias DripDrop.Policy.AdapterPause
   alias DripDrop.Policy.Gate
   alias DripDrop.Policy.QuietHours
   alias DripDrop.Policy.RateLimit
@@ -24,6 +25,7 @@ defmodule DripDrop.Jobs.DispatchStep do
     Channels,
     Enrollment,
     Helpers,
+    HttpHook,
     MessageEvent,
     Redact,
     Repo,
@@ -32,6 +34,21 @@ defmodule DripDrop.Jobs.DispatchStep do
     StepTransition,
     Suppressions
   }
+
+  use PgFlow.Job
+
+  @job queue: :dispatch_step, max_attempts: 1, timeout: 60
+
+  perform :dispatch do
+    fn input, _ctx ->
+      case __MODULE__.perform(input) do
+        :ok -> %{"status" => "ok"}
+        {:error, reason} -> raise "DripDrop dispatch failed: #{inspect(reason)}"
+      end
+    end
+  end
+
+  import PgFlow.Job, except: [perform: 1, perform: 2]
 
   @doc """
   Executes a scheduled step job from scheduler args.
@@ -112,6 +129,7 @@ defmodule DripDrop.Jobs.DispatchStep do
          {:ok, payload} <- UnsubscribeHeaders.apply(payload, context),
          {:ok, adapter} <-
            ChannelAdapters.select(context.step, context.sequence, context.execution),
+         :ok <- AdapterPause.check(context, adapter),
          :ok <- Concurrency.check(context, adapter),
          :ok <- SendingRules.check(context, payload, adapter),
          :ok <- RateLimit.check(context, payload, adapter),
@@ -434,11 +452,22 @@ defmodule DripDrop.Jobs.DispatchStep do
       key = condition.hook_function || condition.http_hook_id
 
       case Evaluator.resolve(condition, hook_context(context)) do
-        {:ok, value} -> {:cont, {:ok, Map.put(results, key, value)}}
+        {:ok, value} -> {:cont, {:ok, put_hook_result(results, condition, key, value)}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
+
+  defp put_hook_result(results, %{http_hook_id: http_hook_id}, key, value)
+       when not is_nil(http_hook_id) do
+    hook = Repo.get!(HttpHook, http_hook_id)
+
+    results
+    |> Map.put(key, value)
+    |> Map.put(hook.key, value)
+  end
+
+  defp put_hook_result(results, _condition, key, value), do: Map.put(results, key, value)
 
   defp load_context(execution) do
     repo = Repo.repo!()
@@ -581,7 +610,8 @@ defmodule DripDrop.Jobs.DispatchStep do
       adapter_id: adapter.id,
       recipient: execution.recipient,
       sender_mailbox: sender_mailbox(payload),
-      sending_domain: sending_domain(payload)
+      sending_domain: sending_domain(payload),
+      recipient_domain: recipient_domain(execution)
     })
   end
 
@@ -593,7 +623,8 @@ defmodule DripDrop.Jobs.DispatchStep do
       "provider" => adapter.provider,
       "recipient" => execution.recipient,
       "sender_mailbox" => sender_mailbox(payload),
-      "sending_domain" => sending_domain(payload)
+      "sending_domain" => sending_domain(payload),
+      "recipient_domain" => recipient_domain(execution)
     })
   end
 
@@ -609,6 +640,11 @@ defmodule DripDrop.Jobs.DispatchStep do
     |> outgoing_address()
     |> Helpers.email_domain()
   end
+
+  defp recipient_domain(%{recipient: recipient}) when is_binary(recipient),
+    do: Helpers.email_domain(recipient)
+
+  defp recipient_domain(_execution), do: nil
 
   defp outgoing_address(payload) do
     Map.get(payload, :from) ||

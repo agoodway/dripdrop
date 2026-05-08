@@ -82,6 +82,7 @@ defmodule DripDrop.Web.WebhookPlug do
   defp request(conn) do
     with {:ok, raw_body, conn} <- read_full_body(conn) do
       body_params = decode_body(raw_body, get_req_header(conn, "content-type"))
+      request_params = if is_map(body_params), do: body_params, else: %{}
 
       {:ok, conn,
        %{
@@ -89,7 +90,7 @@ defmodule DripDrop.Web.WebhookPlug do
          raw_body: raw_body,
          body: raw_body,
          body_params: body_params,
-         params: Map.merge(conn.query_params, body_params),
+         params: Map.merge(conn.query_params, request_params),
          url: request_url(conn)
        }}
     end

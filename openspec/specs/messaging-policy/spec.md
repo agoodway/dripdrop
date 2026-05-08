@@ -1,4 +1,10 @@
-## ADDED Requirements
+# messaging-policy
+
+## Purpose
+
+Messaging policy defines safety and compliance gates applied before delivery, including suppressions, quiet hours, rate limits, thresholds, and sending rules.
+
+## Requirements
 
 ### Requirement: Suppression List Is Checked Before Every Send
 
@@ -38,7 +44,7 @@ When a step has `config["quiet_hours"]` set (or the global config is set), the s
 
 ### Requirement: Rate Limits Are Enforced At Multiple Scopes
 
-The system SHALL enforce rate limits at four scopes simultaneously: per-`channel_adapter_id`, per-`provider`, per-sending-domain (extracted from the `from`/`reply-to` for email), and per-recipient. Limits SHALL be configurable via `channel_adapters.config["rate_limits"]` and step-level overrides. Implementation SHALL use a token-bucket against either Postgres advisory locks or a Redis backend (configurable). Limit hits SHALL reschedule (no error), not fail.
+The system SHALL enforce rate limits at five scopes simultaneously: per-`channel_adapter_id`, per-`provider`, per-sending-domain (extracted from the `from`/`reply-to` for email), per-recipient-domain (extracted from the `to`/`recipient` address for email), and per-recipient. Limits SHALL be configurable via `channel_adapters.config["rate_limits"]` and step-level overrides. Implementation SHALL use a token-bucket against either Postgres advisory locks or a Redis backend (configurable). Limit hits SHALL reschedule (no error), not fail.
 
 #### Scenario: Adapter limit hit reschedules
 - **WHEN** the configured rate limit for an adapter is 60 per minute and a 61st execution claims within the same minute
@@ -47,6 +53,10 @@ The system SHALL enforce rate limits at four scopes simultaneously: per-`channel
 #### Scenario: Per-recipient limit
 - **WHEN** an enrollment causes a third dispatch to the same `recipient` within 24 hours and the global per-recipient limit is `2/24h`
 - **THEN** the third send is deferred until the rolling window allows.
+
+#### Scenario: Per-recipient-domain limit protects against intra-domain spikes
+- **WHEN** the configured `recipient_domain` rate limit is `10/minute` and an eleventh execution within the same minute targets a recipient at `gmail.com` while ten prior sends to other `gmail.com` recipients are still in the bucket
+- **THEN** the execution defers to the next bucket boundary, emits `[:dripdrop, :policy, :rate_limited]` with `scope: :recipient_domain` and `key: "email:gmail.com"`, and is NOT counted against the per-recipient or adapter buckets twice.
 
 ### Requirement: Bounce And Complaint Thresholds Trigger Auto-Suppression
 
@@ -64,6 +74,14 @@ The system SHALL compute, per-`channel_adapter_id` over a rolling 30-day window:
 #### Scenario: Adapter exceeds complaint rate
 - **WHEN** a Mailgun adapter has 4 complaints out of 1000 sent in 30 days (0.4 %)
 - **THEN** the adapter's rate-limit gate engages a synthetic "paused" state preventing new claims, and operators see `complaint_threshold: 0.4` in telemetry.
+
+#### Scenario: Paused adapter blocks new dispatches until resume
+- **WHEN** an adapter has `config["paused_until"]` set to a future timestamp because a prior threshold breach engaged the synthetic paused state
+- **THEN** dispatch SHALL detect the paused state during adapter resolution, defer the execution by transitioning back to `scheduled` with `scheduled_for = paused_until`, emit `[:dripdrop, :policy, :adapter_paused]` telemetry with `adapter_id`, `paused_reason`, and `paused_until`, and SHALL NOT call the channel provider's `deliver/3`.
+
+#### Scenario: Paused adapter resumes automatically when window expires
+- **WHEN** an adapter's `config["paused_until"]` has passed in wall-clock time and a new execution claims
+- **THEN** dispatch proceeds without intervention, the existing `paused_until` value is left intact (operators see audit history), and the adapter participates in selection as usual unless a new threshold breach re-engages the pause.
 
 ### Requirement: Sending Rules Add Optional Per-Sender Controls
 

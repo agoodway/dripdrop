@@ -17,6 +17,33 @@ mix dripdrop.check_schema
 
 Use this in CI and deploy smoke checks.
 
+## Integration Tests
+
+Integration tests exercise the real PgFlow scheduler, worker polling, webhook
+ingest, and database state transitions. Provider HTTP calls stay local through
+`Req.Test`; tests must not call real provider networks.
+
+Run them locally after the test database is up:
+
+```bash
+docker compose up -d
+mix test --only integration
+```
+
+Add new integration tests with `DripDrop.IntegrationCase` and
+`@moduletag :integration`. Use `DripDrop.TestSupport.PgflowHarness` when a test
+needs a PgFlow worker, and prefer `eventually/2` over fixed sleeps for state
+that changes in worker processes.
+
+When debugging PgFlow timing flakes:
+
+- Lower `min_poll_interval` / `max_poll_interval` in `PgflowHarness.child_spec/1`.
+- Increase the relevant `eventually/2` timeout before adding sleeps.
+- Inspect `pgflow.step_tasks`, `pgflow.runs`, and `pgmq.q_dispatch_step` to see
+  whether work is queued, started, failed, or invisible due to retry delay.
+- Keep provider stubs in `Req.Test` shared mode when the request is made from a
+  PgFlow worker process.
+
 ## Telemetry
 
 Attach handlers to `DripDrop.Telemetry.events/0` for dispatch, policy,

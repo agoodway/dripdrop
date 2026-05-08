@@ -5,7 +5,7 @@ defmodule DripDrop.Policy.RateLimit do
 
   alias DripDrop.Helpers
 
-  @scopes [:adapter, :provider, :domain, :recipient]
+  @scopes [:adapter, :provider, :domain, :recipient_domain, :recipient]
 
   @doc """
   Checks configured rate-limit buckets and defers when any bucket is exhausted.
@@ -186,10 +186,18 @@ defmodule DripDrop.Policy.RateLimit do
   defp scope_key(:provider, target), do: {:ok, "#{target.channel}:#{target.provider}"}
   defp scope_key(:domain, %{sending_domain: nil}), do: :skip
   defp scope_key(:domain, target), do: {:ok, target.sending_domain}
+  defp scope_key(:recipient_domain, %{recipient_domain: nil}), do: :skip
+
+  defp scope_key(:recipient_domain, target),
+    do: {:ok, "#{target.channel}:#{target.recipient_domain}"}
+
   defp scope_key(:recipient, %{recipient: nil}), do: :skip
   defp scope_key(:recipient, target), do: {:ok, "#{target.channel}:#{target.recipient}"}
 
   defp target(context, payload, adapter) do
+    sending_domain = sending_domain(payload)
+    recipient_domain = Helpers.email_domain(context.execution.recipient)
+
     %{
       step_execution_id: context.execution.id,
       tenant_key: context.execution.tenant_key,
@@ -197,12 +205,14 @@ defmodule DripDrop.Policy.RateLimit do
       channel: adapter.channel,
       provider: adapter.provider,
       recipient: context.execution.recipient,
-      sending_domain: sending_domain(payload),
+      sending_domain: sending_domain,
+      recipient_domain: recipient_domain,
       metadata: %{
         rate_limit_adapter_id: adapter.id,
         rate_limit_provider: adapter.provider,
         rate_limit_recipient: context.execution.recipient,
-        rate_limit_sending_domain: sending_domain(payload)
+        rate_limit_sending_domain: sending_domain,
+        rate_limit_recipient_domain: recipient_domain
       }
     }
   end
