@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/.."
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_DIR"
 
-pid=$(pgrep -f 'hivemind Procfile.dev' | head -1 || true)
+pid=""
+for candidate in $(pgrep -f 'hivemind Procfile.dev' || true); do
+  cwd=$(lsof -a -p "$candidate" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' || true)
+  if [ "$cwd" = "$REPO_DIR" ]; then
+    pid="$candidate"
+    break
+  fi
+done
+
 if [ -n "$pid" ]; then
   kill -INT "$pid" 2>/dev/null || true
   for _ in $(seq 1 10); do

@@ -10,6 +10,19 @@ defmodule DripDrop.Jobs.CronTick do
   alias DripDrop.{Clock, Repo, Step, Timing}
   alias DripDrop.Dispatch.Steps, as: DispatchSteps
 
+  use PgFlow.Job
+
+  @job queue: :cron_tick, max_attempts: 1, timeout: 60
+
+  perform :tick do
+    fn input, _ctx ->
+      __MODULE__.perform(input)
+      %{"status" => "ok"}
+    end
+  end
+
+  import PgFlow.Job, except: [perform: 1, perform: 2]
+
   @doc """
   Finds cron steps due in the current tick window and seeds their executions.
 

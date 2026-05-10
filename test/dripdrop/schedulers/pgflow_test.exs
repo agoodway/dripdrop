@@ -1,14 +1,44 @@
 defmodule DripDrop.Schedulers.PgflowTest do
   @moduledoc """
-  Unit tests for the PgFlow scheduler adapter focused on the cancel-best-effort
-  contract (Phase 4 Pgflow.cancel implementation). The schedule/2 path enqueues
-  real PgFlow jobs and is exercised through the integration tests in
-  `dispatch_execution_test.exs`; we don't re-test the queue interaction here.
+  Tests for the PgFlow scheduler adapter.
   """
 
-  use ExUnit.Case, async: false
+  use DripDrop.DataCase, async: false
 
   alias DripDrop.Schedulers.Pgflow
+  alias Ecto.Adapters.SQL
+
+  setup do
+    :persistent_term.put({PgFlow, :repo}, TestRepo)
+
+    on_exit(fn ->
+      :persistent_term.erase({PgFlow, :repo})
+    end)
+  end
+
+  describe "schedule/2" do
+    test "sets pgmq visibility to the requested future time" do
+      scheduled_for = DripDrop.Clock.seconds_from_now(18)
+
+      assert {:ok, run_id} = Pgflow.schedule(%{id: Ecto.UUID.generate()}, scheduled_for)
+
+      {:ok, run_id_binary} = Ecto.UUID.dump(run_id)
+
+      assert %{rows: [[%DateTime{} = visible_at]]} =
+               SQL.query!(
+                 TestRepo,
+                 """
+                 SELECT queue.vt
+                 FROM pgflow.step_tasks AS task
+                 JOIN pgmq.q_dispatch_step AS queue ON queue.msg_id = task.message_id
+                 WHERE task.run_id = $1::uuid
+                 """,
+                 [run_id_binary]
+               )
+
+      assert DateTime.diff(visible_at, DripDrop.Clock.now(), :second) in 15..20
+    end
+  end
 
   describe "cancel/1" do
     test "returns :ok for nil job_id" do

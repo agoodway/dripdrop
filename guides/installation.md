@@ -56,10 +56,18 @@ mix pgflow.gen.postgres_extensions_migration
 mix pgflow.gen.pgmq_migration
 mix pgflow.setup
 mix pgflow.gen.job_migration DripDrop.Jobs.DispatchStep
+mix pgflow.gen.job_migration DripDrop.Jobs.CronTick
 ```
 
-For hosts without `pg_cron`, generate PgFlow extensions with `--no-cron` and
-include `DripDrop.Jobs.CronTick` in the configured PgFlow job list.
+`DispatchStep` is the generic worker DripDrop uses for scheduled sends.
+`CronTick` seeds due cron-style DripDrop steps; keep it configured and compiled
+when cron timing is enabled. For hosts without `pg_cron`, generate PgFlow
+extensions with `--no-cron` and keep `CronTick` in the configured PgFlow job
+list.
+
+These are one-time scheduler/job setup migrations. DripDrop sequence authoring
+is dynamic: creating new sequences, steps, transitions, conditions, hooks, or
+enrollments does not require new PgFlow migrations.
 
 Generate the DripDrop wrapper migration:
 

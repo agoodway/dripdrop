@@ -38,7 +38,9 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
     :rate_limits,
     :scheduler,
     :unsubscribe_mailto,
-    :unsubscribe_url_builder
+    :unsubscribe_secret,
+    :unsubscribe_url_builder,
+    DripDrop.Vault
   ]
 
   setup do
@@ -52,6 +54,7 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
     Application.put_env(:dripdrop, :pgflow, jobs: [Jobs.DispatchStep])
     Application.put_env(:dripdrop, :quiet_hours_default, {8, 21})
     Application.put_env(:dripdrop, :scheduler, DripDrop.Schedulers.Test)
+    Application.put_env(:dripdrop, :unsubscribe_secret, "test-unsubscribe-secret")
     Application.delete_env(:dripdrop, :unsubscribe_url_builder)
 
     on_exit(fn ->
@@ -137,8 +140,11 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
     test "adds RFC 8058 headers for opted-in email steps" do
       Application.put_env(:dripdrop, :unsubscribe_mailto, "leave@example.com")
 
+      parent = self()
+
       Application.put_env(:dripdrop, :unsubscribe_url_builder, fn context ->
-        "https://dripdrop.test/u/#{context.execution.id}"
+        send(parent, {:unsubscribe_token, context.token})
+        "https://dripdrop.test/u/#{context.token}"
       end)
 
       context = policy_context(step: %{config: %{"unsubscribe_headers" => true}})
@@ -150,11 +156,16 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       assert payload.headers["List-Unsubscribe"] =~ "<https://dripdrop.test/u/"
       assert payload.headers["List-Unsubscribe"] =~ "<mailto:leave@example.com>"
       assert payload.headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+
+      assert_receive {:unsubscribe_token, token}
+
+      assert {:ok, %{channel: "email", recipient: "person@example.com", tenant_key: "tenant-a"}} =
+               DripDrop.UnsubscribeToken.verify(token)
     end
 
     test "supports nested and legacy opt-in spellings without modes" do
-      Application.put_env(:dripdrop, :unsubscribe_url_builder, fn _context ->
-        "https://dripdrop.test/u/nested"
+      Application.put_env(:dripdrop, :unsubscribe_url_builder, fn context ->
+        "https://dripdrop.test/u/#{context.token}"
       end)
 
       nested_context =
@@ -168,8 +179,8 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       assert {:ok, %{headers: alias_headers}} =
                UnsubscribeHeaders.apply(%{}, alias_context)
 
-      assert nested_headers["List-Unsubscribe"] =~ "https://dripdrop.test/u/nested"
-      assert alias_headers["List-Unsubscribe"] =~ "https://dripdrop.test/u/nested"
+      assert nested_headers["List-Unsubscribe"] =~ "https://dripdrop.test/u/"
+      assert alias_headers["List-Unsubscribe"] =~ "https://dripdrop.test/u/"
     end
 
     test "does not add unsubscribe headers to non-email steps" do
@@ -193,6 +204,19 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       context = policy_context(step: %{config: %{"unsubscribe_headers" => true}})
 
       assert {:error, %{kind: :permanent, reason: {:invalid_unsubscribe_url, {:ok, :not_a_url}}}} =
+               UnsubscribeHeaders.apply(%{}, context)
+    end
+
+    test "returns a permanent error when opted-in headers have no signing secret" do
+      Application.delete_env(:dripdrop, :unsubscribe_secret)
+
+      Application.put_env(:dripdrop, :unsubscribe_url_builder, fn context ->
+        "https://dripdrop.test/u/#{context.token}"
+      end)
+
+      context = policy_context(step: %{config: %{"unsubscribe_headers" => true}})
+
+      assert {:error, %{kind: :permanent, reason: :missing_unsubscribe_secret}} =
                UnsubscribeHeaders.apply(%{}, context)
     end
   end
@@ -233,6 +257,30 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
 
       assert_receive {:startup_result, :ok}
       refute result =~ "unsubscribe_url_builder_unconfigured"
+    end
+
+    test "accepts host-configured vault ciphers without requiring the env key" do
+      previous_env_key = System.get_env("DRIPDROP_ENCRYPTION_KEY")
+      System.delete_env("DRIPDROP_ENCRYPTION_KEY")
+
+      on_exit(fn ->
+        if previous_env_key do
+          System.put_env("DRIPDROP_ENCRYPTION_KEY", previous_env_key)
+        else
+          System.delete_env("DRIPDROP_ENCRYPTION_KEY")
+        end
+      end)
+
+      Application.put_env(:dripdrop, DripDrop.Vault,
+        ciphers: [
+          default:
+            {Cloak.Ciphers.AES.GCM,
+             tag: "AES.GCM.V1",
+             key: Base.decode64!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")}
+        ]
+      )
+
+      assert :ok = StartupCheck.run()
     end
 
     test "does not require PgFlow job registration for the Oban scheduler" do

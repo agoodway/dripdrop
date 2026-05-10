@@ -16,10 +16,12 @@ defmodule DripDrop.Channels do
       mailersend: Channels.Email.MailerSend,
       ses: Channels.Email.SES,
       smtp: Channels.Email.SMTP,
+      local: Channels.Email.Local,
       gmail: Channels.Email.Gmail,
       ms365: Channels.Email.Ms365
     },
     sms: %{
+      local: Channels.SMS.Local,
       twilio: Channels.SMS.Twilio,
       aws_sns: Channels.SMS.AwsSns
     },

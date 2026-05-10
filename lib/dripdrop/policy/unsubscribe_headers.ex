@@ -20,7 +20,8 @@ defmodule DripDrop.Policy.UnsubscribeHeaders do
   def configured?, do: not is_nil(builder())
 
   defp add_headers(payload, context) do
-    with {:ok, unsubscribe_url} <- unsubscribe_url(context) do
+    with {:ok, token} <- unsubscribe_token(payload, context),
+         {:ok, unsubscribe_url} <- unsubscribe_url(Map.put(context, :token, token)) do
       headers =
         payload
         |> Map.get(:headers, %{})
@@ -30,6 +31,30 @@ defmodule DripDrop.Policy.UnsubscribeHeaders do
 
       {:ok, Map.put(payload, :headers, headers)}
     end
+  end
+
+  defp unsubscribe_token(payload, context) do
+    case recipient(payload, context) do
+      nil ->
+        {:error, %{kind: :permanent, reason: :unsubscribe_recipient_missing}}
+
+      recipient ->
+        context
+        |> token_payload(recipient)
+        |> DripDrop.UnsubscribeToken.sign()
+        |> case do
+          {:ok, token} -> {:ok, token}
+          {:error, reason} -> {:error, %{kind: :permanent, reason: reason}}
+        end
+    end
+  end
+
+  defp token_payload(context, recipient) do
+    %{
+      tenant_key: get_in(context, [:enrollment, Access.key(:tenant_key)]),
+      channel: "email",
+      recipient: recipient
+    }
   end
 
   defp unsubscribe_url(context) do
@@ -99,4 +124,10 @@ defmodule DripDrop.Policy.UnsubscribeHeaders do
   defp normalize_headers(_headers), do: %{}
 
   defp builder, do: Application.get_env(:dripdrop, :unsubscribe_url_builder)
+
+  defp recipient(payload, context) do
+    Map.get(payload, :to) ||
+      get_in(context, [:execution, Access.key(:recipient)]) ||
+      get_in(context, [:enrollment, Access.key(:data), "email"])
+  end
 end

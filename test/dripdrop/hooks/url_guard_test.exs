@@ -12,9 +12,16 @@ defmodule DripDrop.Hooks.URLGuardTest do
   alias DripDrop.Hooks.URLGuard
 
   setup do
-    previous = Application.get_env(:dripdrop, :http_hook_allow_http)
-    on_exit(fn -> Application.put_env(:dripdrop, :http_hook_allow_http, previous) end)
+    previous_http = Application.get_env(:dripdrop, :http_hook_allow_http)
+    previous_private = Application.get_env(:dripdrop, :http_hook_allow_private)
+
+    on_exit(fn ->
+      Application.put_env(:dripdrop, :http_hook_allow_http, previous_http)
+      Application.put_env(:dripdrop, :http_hook_allow_private, previous_private)
+    end)
+
     Application.put_env(:dripdrop, :http_hook_allow_http, false)
+    Application.put_env(:dripdrop, :http_hook_allow_private, false)
     :ok
   end
 
@@ -45,6 +52,13 @@ defmodule DripDrop.Hooks.URLGuardTest do
     test "rejects loopback" do
       assert {:error, :private_address} = URLGuard.validate("https://127.0.0.1/")
       assert {:error, :private_address} = URLGuard.validate("https://127.255.255.254/")
+    end
+
+    test "allows loopback when explicitly opted in for local demos" do
+      Application.put_env(:dripdrop, :http_hook_allow_http, true)
+      Application.put_env(:dripdrop, :http_hook_allow_private, true)
+
+      assert :ok = URLGuard.validate("http://127.0.0.1:4001/crm-update")
     end
 
     test "rejects RFC-1918 ranges" do

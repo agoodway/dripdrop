@@ -7,6 +7,11 @@ configuration, optional provider dependencies, encryption key decoding,
 scheduler callbacks, unsubscribe URL builder requirements, and PgFlow job
 registration when `DripDrop.Schedulers.Pgflow` is configured.
 
+When PgFlow is the scheduler, every module listed in
+`config :dripdrop, :pgflow, jobs: ...` must have its PgFlow job migration
+generated and migrated. The default setup uses `DripDrop.Jobs.DispatchStep` and
+`DripDrop.Jobs.CronTick`.
+
 ## Schema Checks
 
 Run:

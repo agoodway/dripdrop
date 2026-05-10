@@ -79,9 +79,21 @@ defmodule DripDrop.StartupCheck do
   defp application_module(app), do: Module.concat([Macro.camelize(to_string(app))])
 
   defp encryption_key_errors do
-    case Vault.decode_env_key() do
-      {:ok, _key} -> []
-      {:error, reason} -> [{:invalid_encryption_key, reason}]
+    if configured_vault_ciphers?() do
+      []
+    else
+      case Vault.decode_env_key() do
+        {:ok, _key} -> []
+        {:error, reason} -> [{:invalid_encryption_key, reason}]
+      end
+    end
+  end
+
+  defp configured_vault_ciphers? do
+    case Application.get_env(:dripdrop, Vault, []) |> Keyword.get(:ciphers) do
+      nil -> false
+      [] -> false
+      _ciphers -> true
     end
   end
 

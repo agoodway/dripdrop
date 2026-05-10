@@ -41,7 +41,7 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, github: "agoodway/pgflow", ref: "364239cdcde46322f54b3d1c9decb37345537999"},
+      {:pgflow, path: "../pgflow"},
       {:ecto_evolver,
        github: "agoodway/ecto_evolver",
        ref: "cef2428838ebb784dfc27dc8d032a5488448a413",

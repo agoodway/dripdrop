@@ -11,7 +11,7 @@ defmodule DripDrop.Timing do
   alias Crontab.Scheduler
 
   @primary_key false
-  @delay_units ~w(minutes hours days weeks)
+  @delay_units ~w(seconds minutes hours days weeks)
   @timing_types ~w(immediate delay cron event)
   @weekdays %{
     "sunday" => 0,
@@ -75,7 +75,7 @@ defmodule DripDrop.Timing do
   def calculate_next_run(%__MODULE__{type: "immediate"}, _from), do: {:ok, DateTime.utc_now()}
 
   def calculate_next_run(%__MODULE__{type: "delay", delay_amount: amount, delay_unit: unit}, from) do
-    {:ok, DateTime.add(from, delay_seconds(amount, unit), :second)}
+    {:ok, DateTime.add(from, delay_amount(amount, unit), delay_unit(unit))}
   end
 
   def calculate_next_run(%__MODULE__{type: "event", trigger_event: event}, _from),
@@ -187,7 +187,10 @@ defmodule DripDrop.Timing do
   end
 
   defp parse_delay(duration) do
-    case Regex.run(~r/^(\d+)\s+(minute|minutes|hour|hours|day|days|week|weeks)$/, duration) do
+    case Regex.run(
+           ~r/^(\d+)\s+(second|seconds|minute|minutes|hour|hours|day|days|week|weeks)$/,
+           duration
+         ) do
       [_, amount, unit] ->
         {:ok,
          %{
@@ -201,13 +204,18 @@ defmodule DripDrop.Timing do
     end
   end
 
+  defp pluralize_unit(unit) when unit in ~w(second seconds), do: "seconds"
   defp pluralize_unit(unit) when unit in ~w(minute minutes), do: "minutes"
   defp pluralize_unit(unit) when unit in ~w(hour hours), do: "hours"
   defp pluralize_unit(unit) when unit in ~w(day days), do: "days"
   defp pluralize_unit(unit) when unit in ~w(week weeks), do: "weeks"
 
-  defp delay_seconds(amount, "minutes"), do: amount * 60
-  defp delay_seconds(amount, "hours"), do: amount * 3_600
-  defp delay_seconds(amount, "days"), do: amount * 86_400
-  defp delay_seconds(amount, "weeks"), do: amount * 604_800
+  defp delay_amount(amount, "weeks"), do: amount * 7
+  defp delay_amount(amount, _unit), do: amount
+
+  defp delay_unit("seconds"), do: :second
+  defp delay_unit("minutes"), do: :minute
+  defp delay_unit("hours"), do: :hour
+  defp delay_unit("days"), do: :day
+  defp delay_unit("weeks"), do: :day
 end

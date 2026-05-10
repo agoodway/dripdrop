@@ -23,8 +23,10 @@ defmodule DripDrop.Channels.SMS.AwsSns do
     region = Helpers.credential(adapter, :region)
     opts = publish_opts(payload, phone_number)
 
-    message
-    |> ExAws.SNS.publish(opts)
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    operation = apply(ExAws.SNS, :publish, [message, opts])
+
+    operation
     |> request(region: region)
     |> sns_result()
   end
@@ -41,8 +43,11 @@ defmodule DripDrop.Channels.SMS.AwsSns do
   # to assert on the built `%ExAws.Operation.Query{}` and return a canned
   # response without performing a network call.
   defp request(operation, opts) do
-    request_fun = Application.get_env(:dripdrop, :ex_aws_request_fun, &ExAws.request/2)
-    request_fun.(operation, opts)
+    case Application.get_env(:dripdrop, :ex_aws_request_fun) do
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      nil -> apply(ExAws, :request, [operation, opts])
+      request_fun when is_function(request_fun, 2) -> request_fun.(operation, opts)
+    end
   end
 
   defp ex_aws_sns_available? do

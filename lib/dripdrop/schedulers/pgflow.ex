@@ -10,13 +10,9 @@ defmodule DripDrop.Schedulers.Pgflow do
 
   @impl Scheduler
   def schedule(%{id: step_execution_id}, scheduled_for) do
-    if Code.ensure_loaded?(PgFlow) and function_exported?(PgFlow, :enqueue, 2) do
-      PgFlow.enqueue(Jobs.DispatchStep, %{
-        "step_execution_id" => step_execution_id,
-        "scheduled_for" => scheduled_for
-      })
-    else
-      {:error, :pgflow_unavailable}
+    case ensure_pgflow_available() do
+      :ok -> enqueue_with_delay(step_execution_id, scheduled_for)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -41,5 +37,22 @@ defmodule DripDrop.Schedulers.Pgflow do
 
       :ok
     end
+  end
+
+  defp ensure_pgflow_available do
+    if Code.ensure_loaded?(PgFlow) and function_exported?(PgFlow, :enqueue_at, 3) do
+      :ok
+    else
+      {:error, :pgflow_unavailable}
+    end
+  end
+
+  defp enqueue_with_delay(step_execution_id, scheduled_for) do
+    input = %{
+      "step_execution_id" => step_execution_id,
+      "scheduled_for" => DateTime.to_iso8601(scheduled_for)
+    }
+
+    PgFlow.enqueue_at(Jobs.DispatchStep, input, scheduled_for)
   end
 end

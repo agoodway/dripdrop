@@ -86,7 +86,20 @@ defmodule DripDrop.Channels.Email.SwooshDelivery do
   defp mailbox({name, email}), do: {name, email}
   defp mailbox(%{"name" => name, "email" => email}), do: {name, email}
   defp mailbox(%{name: name, email: email}), do: {name, email}
-  defp mailbox(email) when is_binary(email), do: email
+
+  defp mailbox(email) when is_binary(email) do
+    case Regex.run(~r/^\s*(.*?)\s*<([^<>\s]+@[^<>\s]+)>\s*$/, email) do
+      [_match, name, address] -> {unquote_display_name(name), address}
+      _other -> email
+    end
+  end
+
+  defp unquote_display_name(name) do
+    name
+    |> String.trim()
+    |> String.trim_leading("\"")
+    |> String.trim_trailing("\"")
+  end
 
   defp recipients(nil), do: []
   defp recipients(recipients) when is_list(recipients), do: Enum.map(recipients, &mailbox/1)

@@ -46,9 +46,12 @@ defmodule DripDrop.Helpers do
     do: {:ok, module}
 
   def module_from_string(module, _missing_reason, unknown_reason) when is_binary(module) do
-    module
-    |> ensure_elixir_prefix()
-    |> existing_atom(unknown_reason)
+    with {:ok, module} <- module_atom(module, unknown_reason),
+         {:module, module} <- Code.ensure_loaded(module) do
+      {:ok, module}
+    else
+      {:error, _reason} -> {:error, unknown_reason}
+    end
   end
 
   @doc """
@@ -253,6 +256,22 @@ defmodule DripDrop.Helpers do
     ArgumentError -> nil
   end
 
-  defp ensure_elixir_prefix("Elixir." <> _rest = module), do: module
-  defp ensure_elixir_prefix(module), do: "Elixir." <> module
+  defp module_atom(module, unknown_reason) do
+    module =
+      module
+      |> String.trim()
+      |> String.trim_leading("Elixir.")
+
+    if valid_module_name?(module) do
+      {:ok, module |> String.split(".") |> Module.safe_concat()}
+    else
+      {:error, unknown_reason}
+    end
+  rescue
+    ArgumentError -> {:error, unknown_reason}
+  end
+
+  defp valid_module_name?(module) do
+    Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$/, module)
+  end
 end

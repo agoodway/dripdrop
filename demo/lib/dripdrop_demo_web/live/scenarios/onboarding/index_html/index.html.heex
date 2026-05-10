@@ -1,0 +1,230 @@
+<Layouts.app flash={@flash} current_path="/scenarios/onboarding">
+  <% steps = sequence_steps(@executions) %>
+  <% nudge = latest_nudge(@nudges) %>
+  <% setup_check = latest_setup_check(@setup_checks) %>
+  <% telegram = latest_telegram(@telegrams) %>
+
+  <div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h1 class="text-3xl font-black tracking-tight text-base-content sm:text-4xl">
+          {@scenario.name}
+        </h1>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/60">
+          {@scenario.description}
+        </p>
+      </div>
+      <div class="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          class="btn btn-primary"
+          phx-click="enroll"
+          disabled={!@sequence_available?}
+        >
+          Start Onboarding Sequence <.icon name="hero-play-circle" class="size-5" />
+        </button>
+      </div>
+    </div>
+
+    <section class="grid gap-5 xl:grid-cols-2">
+      <.sequence_flipper
+        title="Sequence steps"
+        subtitle="Follow each step as it queues up, sends, and completes."
+        icon="hero-queue-list"
+        steps={steps}
+        selected_step_key={@selected_step_key}
+        code_open?={@api_mirror_open?}
+        code_title={api_mirror_title(@selected_step_key)}
+        code={api_mirror_snippet(@selected_step_key)}
+      />
+
+      <.sequence_messages_flipper
+        title="Sequence messages"
+        subtitle="Messages appear here as each step is sent."
+        icon="hero-inbox-stack"
+        logs_open?={@sequence_logs_open?}
+        events={@events}
+      >
+        <div class="grid gap-4 lg:grid-cols-2 xl:grid-cols-1">
+          <div
+            :if={artifact_delivered?(@delivered_artifacts, "welcome-email")}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="welcome-email"
+            class={[
+              "artifact-slide-in overflow-hidden rounded-lg border border-primary/35 bg-base-100 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60",
+              selected_step_class(@selected_step_key, "welcome-email")
+            ]}
+          >
+            <div class="flex items-center justify-between border-b border-base-300 bg-base-200/60 px-4 py-2">
+              <div>
+                <div class="text-xs font-bold uppercase text-base-content/45">Email</div>
+                <div class="mt-0.5 text-[11px] font-semibold text-primary">welcome-email</div>
+              </div>
+              <span class="badge badge-sm">sam@example.com</span>
+            </div>
+            <div class="border-b border-base-300 px-5 py-4">
+              <h3 class="text-lg font-bold tracking-tight text-base-content">
+                Welcome to DripDrop, Sam
+              </h3>
+              <div class="mt-4 flex items-start gap-3">
+                <span class="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-sm font-black text-primary-content">
+                  D
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div class="text-sm font-semibold text-base-content">DripDrop Demo</div>
+                      <div class="text-xs text-base-content/45">
+                        demo@dripdrop.dev
+                      </div>
+                    </div>
+                    <div class="text-xs text-base-content/40">just now</div>
+                  </div>
+                  <div class="mt-2 text-xs text-base-content/45">
+                    to Sam &lt;sam@example.com&gt;
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="space-y-4 px-5 py-5 text-sm leading-7 text-base-content/80">
+              <p>Hi Sam,</p>
+              <p>Your onboarding sequence has started.</p>
+              <p class="text-base-content/55">- The DripDrop Demo</p>
+            </div>
+          </div>
+
+          <div
+            :if={telegram}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="telegram-message"
+            class={[
+              "artifact-slide-in rounded-lg border border-primary/35 bg-blue-50 p-4 text-blue-950 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60 dark:bg-blue-950/30 dark:text-blue-50",
+              selected_step_class(@selected_step_key, "telegram-message")
+            ]}
+          >
+            <div class="mb-3 flex items-center justify-between">
+              <div>
+                <div class="text-xs font-bold uppercase opacity-60">Telegram</div>
+                <div class="mt-0.5 text-[11px] font-semibold opacity-70">telegram-message</div>
+              </div>
+              <span class="badge badge-sm">{telegram.chat_id}</span>
+            </div>
+            <div class="flex gap-3">
+              <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-blue-500 text-white">
+                <.icon name="hero-paper-airplane" class="size-5" />
+              </span>
+              <div>
+                <div class="font-bold">New signup alert</div>
+                <p class="mt-1 text-sm leading-6">{telegram.text}</p>
+                <div class="mt-2 text-xs opacity-70">{telegram.event}</div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            :if={nudge}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="in-app-nudge"
+            class={[
+              "artifact-slide-in rounded-lg border border-primary/35 bg-emerald-50 p-4 text-emerald-950 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60 dark:bg-emerald-950/30 dark:text-emerald-50",
+              selected_step_class(@selected_step_key, "in-app-nudge")
+            ]}
+          >
+            <div class="mb-3 flex items-center justify-between">
+              <div>
+                <div class="text-xs font-bold uppercase opacity-60">In-app PubSub</div>
+                <div class="mt-0.5 text-[11px] font-semibold opacity-70">in-app-nudge</div>
+              </div>
+              <span class="badge badge-sm">demo:in_app</span>
+            </div>
+            <div class="flex gap-3">
+              <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-emerald-500 text-white">
+                <.icon name="hero-bell-alert" class="size-5" />
+              </span>
+              <div>
+                <div class="font-bold">{nudge.title}</div>
+                <p class="mt-1 text-sm leading-6">
+                  {nudge.message}
+                </p>
+                <div class="mt-2 text-xs opacity-70">{nudge.event}</div>
+              </div>
+            </div>
+          </div>
+
+          <.decision_card
+            :if={setup_check}
+            step_key="setup-status-check"
+            label="HTTP hook"
+            title="Setup status check"
+            icon="hero-globe-alt"
+            icon_class="bg-indigo-500/15 text-indigo-700 dark:text-indigo-200"
+            badge={if setup_check.sms_followup_eligible, do: "Eligible", else: "Not eligible"}
+          >
+            <div class="mt-3 grid gap-2 sm:grid-cols-3">
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Setup status webhook
+                </div>
+                <div class="mt-1 text-sm font-semibold">
+                  {if setup_check.sms_followup_eligible, do: "Eligible", else: "Not eligible"}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Account state
+                </div>
+                <div class="mt-1 text-sm font-semibold">
+                  {setup_check.setup_state} / {setup_check.plan}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Next step
+                </div>
+                <div class="mt-1 text-sm font-semibold">
+                  {if setup_check.sms_followup_eligible, do: "Queue SMS", else: "Notify team"}
+                </div>
+              </div>
+            </div>
+
+            <p class="mt-3 text-xs leading-5 text-base-content/60">
+              DripDrop called the setup-status HTTP hook, evaluated the response, and routed Sam
+              through the SMS follow-up path.
+            </p>
+          </.decision_card>
+
+          <div
+            :if={artifact_delivered?(@delivered_artifacts, "setup-sms")}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="setup-sms"
+            class={[
+              "artifact-slide-in w-full overflow-hidden rounded-[2rem] border border-primary/35 bg-slate-950 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60",
+              selected_step_class(@selected_step_key, "setup-sms")
+            ]}
+          >
+            <div class="border-b border-white/10 bg-slate-900 px-4 py-3 text-center">
+              <div class="text-xs font-semibold text-slate-200">+1 (555) 555-0101</div>
+              <div class="mt-0.5 text-[11px] text-slate-500">setup-sms</div>
+            </div>
+            <div class="bg-[linear-gradient(180deg,#111827,#020617)] px-3 py-5">
+              <div class="ml-auto max-w-[82%] rounded-[1.25rem] rounded-br-md bg-blue-500 px-4 py-2.5 text-[15px] leading-6 text-white shadow-sm">
+                Sam, your onboarding setup is complete!
+              </div>
+              <div class="mt-2 text-right text-[11px] text-slate-500">Delivered</div>
+            </div>
+          </div>
+        </div>
+      </.sequence_messages_flipper>
+    </section>
+  </div>
+</Layouts.app>

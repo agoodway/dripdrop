@@ -1,0 +1,247 @@
+<Layouts.app flash={@flash} current_path="/scenarios/lead-nurture">
+  <% lead_event = latest_lead_event(@lead_messages) %>
+  <% visible_executions = visible_executions(@executions) %>
+  <% step_rows = steps(@executions, @fixture, lead_event) %>
+  <% slack_notification = step_execution(visible_executions, "slack-notification") %>
+  <% webhook = latest_webhook(@webhooks) %>
+  <% nurture_email = step_execution(visible_executions, "nurture-email") %>
+
+  <div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h1 class="text-3xl font-black tracking-tight text-base-content sm:text-4xl">
+          {@scenario.name}
+        </h1>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/60">
+          {@scenario.description}
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button
+          class={fixture_button_class(@fixture, :high_fit, @enrollment)}
+          phx-click="enroll"
+          phx-value-fixture="high_fit"
+          disabled={!@sequence_available?}
+        >
+          High-fit lead <.icon name="hero-play-circle" class="size-5" />
+        </button>
+        <button
+          class={fixture_button_class(@fixture, :nurture, @enrollment)}
+          phx-click="enroll"
+          phx-value-fixture="nurture"
+          disabled={!@sequence_available?}
+        >
+          Nurture lead <.icon name="hero-play-circle" class="size-5" />
+        </button>
+        <button
+          class={fixture_button_class(@fixture, :invalid_email, @enrollment)}
+          phx-click="enroll"
+          phx-value-fixture="invalid_email"
+          disabled={!@sequence_available?}
+        >
+          Invalid email <.icon name="hero-play-circle" class="size-5" />
+        </button>
+      </div>
+    </div>
+
+    <section class="grid gap-5 xl:grid-cols-2">
+      <.sequence_flipper
+        title="Sequence steps"
+        subtitle="Follow each step as it queues up, sends, and completes."
+        icon="hero-queue-list"
+        steps={step_rows}
+        selected_step_key={@selected_step_key}
+        code_open?={@api_mirror_open?}
+        code_title={api_mirror_title(@selected_step_key)}
+        code={api_mirror_snippet(@selected_step_key)}
+      />
+
+      <.sequence_messages_flipper
+        title="Sequence messages"
+        subtitle="Messages appear here as each branch step is sent."
+        icon="hero-inbox-stack"
+        logs_open?={@sequence_logs_open?}
+        events={@events}
+      >
+        <div class="grid gap-4">
+          <.decision_card
+            :if={branch_decisions_visible?(lead_event, visible_executions)}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="email-verification"
+            step_key="email-verification"
+            label="Elixir hook"
+            title="GoodVerify email check"
+            icon="demo-elixir-drop"
+            icon_class="bg-purple-500/15 text-purple-700 dark:text-purple-200"
+            badge={email_verification_status(@fixture)}
+            selected?={@selected_step_key == "email-verification"}
+          >
+            <p class="mt-1 text-sm leading-6 text-base-content/75">
+              DripDrop calls the host Elixir hook before routing the lead.
+            </p>
+            <div class="mt-2 text-xs text-base-content/60">
+              Verified with
+              <.link
+                href="https://goodverify.dev"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="font-semibold underline-offset-2 hover:underline"
+              >
+                GoodVerify.dev
+              </.link>
+            </div>
+            <div
+              :if={branch_decisions_visible?(lead_event, visible_executions)}
+              class="mt-3 overflow-hidden rounded-lg border border-white/10 bg-slate-900 text-slate-100 shadow-inner"
+            >
+              <div class="flex items-center justify-between border-b border-white/10 bg-slate-800 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-cyan-200">
+                  GoodVerify.dev Elixir result
+                </div>
+                <span class={["badge badge-sm", goodverify_result_badge_class(@fixture)]}>
+                  {goodverify_result_label(@fixture)}
+                </span>
+              </div>
+              <div class="overflow-x-auto p-3 text-xs leading-6">
+                {highlight_elixir(goodverify_result_preview(@enrollment, @fixture))}
+              </div>
+            </div>
+          </.decision_card>
+
+          <.decision_card
+            :if={branch_decisions_visible?(lead_event, visible_executions)}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="lead-score-hook"
+            step_key="lead-score-hook"
+            label="HTTP hook"
+            title="Lead score API call"
+            icon="hero-globe-alt"
+            icon_class="bg-indigo-500/15 text-indigo-700 dark:text-indigo-200"
+            badge={lead_score_status(@fixture)}
+            selected?={@selected_step_key == "lead-score-hook"}
+          >
+            <p class="mt-1 text-sm leading-6 text-base-content/75">
+              DripDrop calls the lead-score HTTP hook, then applies the predicate on this branch.
+            </p>
+
+            <div class="mt-3 grid gap-2 sm:grid-cols-2">
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Lead score API
+                </div>
+                <div class="mt-1 text-sm font-semibold">
+                  {lead_score_value(@fixture)}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Route
+                </div>
+                <div class="mt-1 text-sm font-semibold">
+                  {lead_score_route(@fixture)}
+                </div>
+              </div>
+
+              <div class="rounded-md border border-base-300/60 bg-base-100 px-3 py-2 sm:col-span-2">
+                <div class="text-[11px] font-bold uppercase text-base-content/45">
+                  Predicate filter
+                </div>
+                <code class="mt-1 block w-full whitespace-normal break-words rounded bg-base-200 px-2 py-1 font-mono text-xs leading-5">
+                  enrollment.company_size >= 50
+                </code>
+              </div>
+            </div>
+          </.decision_card>
+
+          <div
+            :if={email_sent?(visible_executions, "nurture-email")}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="nurture-email"
+            class={[
+              "artifact-slide-in overflow-hidden rounded-lg border border-primary/35 bg-base-100 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60",
+              selected_step_class(@selected_step_key, "nurture-email")
+            ]}
+          >
+            <div class="flex items-center justify-between border-b border-base-300 bg-base-200/60 px-4 py-2">
+              <div>
+                <div class="text-xs font-bold uppercase text-base-content/45">Email</div>
+                <div class="mt-0.5 text-[11px] font-semibold text-primary">nurture-email</div>
+              </div>
+              <span class="badge badge-sm">sam@example.com</span>
+            </div>
+            <div class="border-b border-base-300 px-5 py-4">
+              <h3 class="text-lg font-bold tracking-tight text-base-content">
+                {email_subject(nurture_email)}
+              </h3>
+              <div class="mt-4 flex items-start gap-3">
+                <span class="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-sm font-black text-primary-content">
+                  G
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div class="text-sm font-semibold text-base-content">Goodway</div>
+                      <div class="text-xs text-base-content/45">demo@dripdrop.dev</div>
+                    </div>
+                    <div class="text-xs text-base-content/40">just now</div>
+                  </div>
+                  <div class="mt-2 text-xs text-base-content/45">
+                    to Sam &lt;sam@example.com&gt;
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="space-y-4 px-5 py-5 text-sm leading-7 text-base-content/80">
+              <p>{email_text(nurture_email)}</p>
+            </div>
+          </div>
+
+          <div
+            :if={slack_notification}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key="slack-notification"
+            class={[
+              "artifact-slide-in rounded-lg border border-primary/35 bg-amber-50 p-4 text-amber-950 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60 dark:bg-amber-950/30 dark:text-amber-50",
+              selected_step_class(@selected_step_key, "slack-notification")
+            ]}
+          >
+            <div class="mb-3 flex items-center justify-between">
+              <div>
+                <div class="text-xs font-bold uppercase opacity-60">Slack</div>
+                <div class="mt-0.5 text-[11px] font-semibold opacity-70">slack-notification</div>
+              </div>
+              <span class="badge badge-sm">{slack_channel(slack_notification)}</span>
+            </div>
+            <div class="flex gap-3">
+              <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-600 text-white">
+                <.icon name="hero-hashtag" class="size-5" />
+              </span>
+              <div>
+                <div class="font-bold">Slack notification</div>
+                <p class="mt-1 text-sm leading-6">{slack_text(slack_notification)}</p>
+                <div class="mt-2 text-xs opacity-70">Slack incoming webhook example</div>
+              </div>
+            </div>
+          </div>
+
+          <.webhook_card
+            :if={webhook}
+            webhook={webhook}
+            step_key={webhook.step_key}
+            label="CRM webhook"
+            selected?={@selected_step_key == webhook.step_key}
+          />
+        </div>
+      </.sequence_messages_flipper>
+    </section>
+  </div>
+</Layouts.app>

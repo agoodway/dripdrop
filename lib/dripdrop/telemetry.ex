@@ -34,6 +34,8 @@ defmodule DripDrop.Telemetry do
       Metadata: `:enrollment_id`, `:sequence_version_id`, `:adapter_id`, `:tenant_key`.
     * `[:dripdrop, :dispatch, :pool_exhausted]` - no eligible pool member.
       Metadata: `:pool_id`, `:sequence_version_id`, `:evicted_adapter_ids`, `:tenant_key`.
+    * `[:dripdrop, :dispatch, :sent]` - provider accepted a dispatch and DripDrop persisted the sent event.
+      Metadata: `:enrollment_id`, `:step_execution_id`, `:sequence_key`, `:step_key`, `:channel`, `:adapter_provider`, `:provider_message_id`, `:out_message_id`, `:tenant_key`.
     * `[:dripdrop, :policy, :adapter_resting]` - outbound adapter is resting.
       Metadata: `:adapter_id`, `:step_execution_id`, `:tenant_key`, `:defer_until`.
     * `[:dripdrop, :policy, :ramp_cap]` - adapter effective daily cap hit.
@@ -66,6 +68,7 @@ defmodule DripDrop.Telemetry do
     [:dripdrop, :dispatch, :pool_exhausted],
     [:dripdrop, :dispatch, :phase, :start],
     [:dripdrop, :dispatch, :phase, :stop],
+    [:dripdrop, :dispatch, :sent],
     [:dripdrop, :enrollment, :paused_pin_unavailable],
     [:dripdrop, :enrollment, :sender_reassigned],
     [:dripdrop, :health, :external_signal],

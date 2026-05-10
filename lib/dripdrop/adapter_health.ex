@@ -136,6 +136,7 @@ defmodule DripDrop.AdapterHealth do
     state = Map.get(attrs, :health_state, Map.get(attrs, "health_state"))
     score = Map.get(attrs, :health_score, Map.get(attrs, "health_score"))
     source = Map.get(attrs, :source, Map.get(attrs, "source"))
+    resting_until = Map.get(attrs, :resting_until, Map.get(attrs, "resting_until"))
 
     with :ok <- validate_external_state(state),
          :ok <- validate_external_score(score),
@@ -144,7 +145,8 @@ defmodule DripDrop.AdapterHealth do
              manual: true,
              reason: :external_signal,
              source: source,
-             health_score: score
+             health_score: score,
+             resting_until: resting_until
            ) do
       :telemetry.execute(
         [:dripdrop, :health, :external_signal],

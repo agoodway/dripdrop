@@ -6,52 +6,65 @@ The repository SHALL contain a `demo/` Phoenix application directory at the repo
 
 #### Scenario: Demo boots against the local library
 - **WHEN** an operator runs `cd demo && mix setup && mix phx.server` after starting the Postgres container with `docker compose up -d` from the repo root
-- **THEN** the application boots, loads the local DripDrop modules (verified by `Code.ensure_loaded?(DripDrop)`), runs the host migration that wraps `DripDrop.Migration.up/0`, and serves the home page on `http://localhost:4000`.
+- **THEN** the application boots, loads the local DripDrop modules (verified by `Code.ensure_loaded?(DripDrop)`), runs the host migration that wraps `DripDrop.Migration.up/0`, and serves the home page on `http://localhost:4012`.
 
 #### Scenario: Demo is excluded from library publishing
 - **WHEN** the library is packaged for Hex via `mix hex.build` (run from the repo root, NOT from `demo/`)
 - **THEN** the resulting tarball does NOT contain any files from `demo/`. The exclusion is asserted by an automated check in CI.
 
-### Requirement: Demo Ships Three Scenario LiveViews Mirroring The Library README Examples
+### Requirement: Demo Ships Three Scenario LiveViews
 
-The demo SHALL render three scenario LiveViews under `lib/dripdrop_demo_web/live/scenarios/`, each implementing one of the README examples end-to-end:
+The demo SHALL render three scenario LiveViews under `lib/dripdrop_demo_web/live/scenarios/`:
 
-- `OnboardingLive` — SaaS onboarding sequence (welcome email → 5-min PubSub notification → 1-day conditional setup reminder → weekly Monday-9am cron digest → 7-day enterprise-only SMS).
-- `LeadNurtureLive` — Lead nurture sequence with HTTP-hook lead score branching, Slack notification to sales, and webhook update to a CRM stub. Calls a deterministic in-process mock HTTP-hook endpoint shipped at `demo/lib/dripdrop_demo/mock_hooks.ex`.
-- `MultiChannelTrialLive` — Trial-ending notifications fanned across email, SMS, in-app PubSub, and Telegram.
+- `OnboardingLive` — welcome email, in-app PubSub nudge, HTTP setup-status check, SMS follow-up, and Telegram team update.
+- `LeadNurtureLive` — email verification hook, HTTP lead-score branching, nurture email, PubSub sales alert, and CRM webhook update.
+- `OutboundLive` — cold outbound email thread for Elixir, Phoenix, and LiveView consulting services with multiple recipients and sender-pool behavior.
 
-Each LiveView SHALL provide a form to enroll a fixture subscriber, display the live state of that subscriber's enrollment (current step, step executions, message events), and update via PubSub as dispatch progresses.
+Each LiveView SHALL provide a form to enroll one or more fixture subscribers, display the live state of those enrollments (current step, step executions, message events), and update via PubSub as dispatch progresses.
 
 #### Scenario: Enroll a fixture subscriber from OnboardingLive
-- **WHEN** an operator clicks "Enroll fixture user" on `/scenarios/onboarding`
+- **WHEN** an operator clicks "Start Onboarding Sequence" on `/scenarios/onboarding`
 - **THEN** the LiveView calls `DripDrop.enroll/1` with the fixture, the page subscribes to a PubSub topic for that enrollment, and renders the welcome-email step transitioning `scheduled → claiming → sending → sent` in real time.
 
 #### Scenario: Lead score branching is visible in LeadNurtureLive
-- **WHEN** the operator triggers `LeadNurtureLive` with a fixture lead whose mocked HTTP-hook score is 85 (≥70)
-- **THEN** the LiveView shows the "Enterprise Pitch" step being scheduled and the "Notify Sales" Slack step being sent; with a score of 40, neither fires and the LiveView shows the conditions evaluating to `false`.
+- **WHEN** the operator starts the high-fit lead path
+- **THEN** the LiveView shows the GoodVerify email check, lead-score HTTP hook, predicate branch, sales PubSub alert, and hot-lead CRM webhook update.
 
-#### Scenario: Multi-channel fan-out is observable
-- **WHEN** the operator clicks "Trigger trial-ending fan-out" on `/scenarios/multichannel-trial`
-- **THEN** four step executions are scheduled (email, SMS, PubSub, Telegram), and the LiveView lists each with its target adapter and state.
+#### Scenario: Nurture and invalid-email branches are visible
+- **WHEN** the operator starts the nurture or invalid-email lead path
+- **THEN** the LiveView shows the branch decisions and only the messages allowed by the hook and predicate results.
 
-### Requirement: Demo Includes A Read-Only In-App Dashboard
+### Requirement: OutboundLive Demonstrates Sender Pools And Threaded Email
 
-The demo SHALL expose a read-only dashboard under `/dashboard` that surfaces operationally interesting library state, intentionally minimal (the full editable dashboard is deferred to the future `add-dripdrop-dashboard` change). The dashboard SHALL include four LiveViews:
+`OutboundLive` at `/scenarios/outbound` SHALL exercise the cold-outbound public-API surface against the seeded `cold_drip_pool` and a 3-step outbound sequence configured with `mode: :outbound` and `config["pool_id"]`. The LiveView SHALL use the same scenario layout as onboarding and lead nurture: sequence steps/code, sequence messages, and runtime logs. The sequence messages panel SHALL show the outbound email thread and allow cycling through enrolled recipients.
 
-- `/dashboard/sequences` — list of sequences with version count, active version, and total enrollments.
-- `/dashboard/enrollments` — paginated list of enrollments filterable by sequence and state.
-- `/dashboard/executions` — recent `step_executions` (default last 24 h) with state, channel, adapter, and link to the linked enrollment.
-- `/dashboard/events` — recent `message_events` (default last 24 h) with provider, event_type, and recipient.
+#### Scenario: WDRR distributes cold-drip enrollments across the pool
+- **WHEN** an operator clicks "Enroll 8 prospects" on `/scenarios/outbound`
+- **THEN** eight enrollments are created with `effective_mode: :outbound` and `adapter_id` pinned by WDRR; the enrollment table shows the pinned adapter for each row, and at least one enrollment is pinned to each of the three pool members (≥1 per adapter over 8 enrollments at weight 1).
 
-Every dashboard LiveView SHALL be **read-only**: no create / update / delete actions, no forms, no mutating endpoints. `Phoenix.LiveDashboard` SHALL be mounted at `/phx-dashboard` for general OTP introspection.
+#### Scenario: Threading chain is visible in the message panel
+- **WHEN** an enrollment has progressed through at least two steps
+- **THEN** the message panel lists the email thread in order and exposes the current `Message-ID`, `In-Reply-To`, and `References` values for the selected recipient.
 
-#### Scenario: Dashboard never mutates state
-- **WHEN** an operator navigates anywhere in `/dashboard/*`
-- **THEN** every page renders without exposing forms, buttons, or actions that issue `INSERT`, `UPDATE`, or `DELETE` against the `dripdrop` schema.
+### Requirement: Demo Uses Short Observable Timing
 
-#### Scenario: Pagination works on long lists
-- **WHEN** more than 50 enrollments exist for a sequence
-- **THEN** `/dashboard/enrollments?sequence=<id>` paginates at 50 per page using cursor-based pagination on `inserted_at`.
+The demo SHALL persist short DripDrop delay values so each scenario can be observed end-to-end in seconds. The library scheduler SHALL be unchanged.
+
+#### Scenario: Library scheduler behavior is unchanged
+- **WHEN** the demo persists a short delay for a scenario step
+- **THEN** the library's PgFlow scheduler schedules and dispatches that step exactly as it would for any other delay; no library-side time-scaling exists, and `mix dripdrop.check_schema` continues to verify the unmodified library schema.
+
+### Requirement: Outbound Messages Are Previewable In The Scenario UI
+
+`OutboundLive` SHALL render the outbound email thread directly in the scenario UI. The demo SHALL NOT rely on `/dev/mailbox` for production-facing demos.
+
+#### Scenario: Outbound email thread is visible in the scenario
+- **WHEN** a cold outbound enrollment sends one or more email steps
+- **THEN** `OutboundLive` shows the sent email content in the sequence messages panel without requiring a separate mailbox preview.
+
+### Requirement: Demo Includes Phoenix LiveDashboard In Dev
+
+`Phoenix.LiveDashboard` SHALL be mounted at `/phx-dashboard` in dev for OTP introspection.
 
 #### Scenario: LiveDashboard is mounted for OTP introspection
 - **WHEN** an operator navigates to `/phx-dashboard`
@@ -59,7 +72,7 @@ Every dashboard LiveView SHALL be **read-only**: no create / update / delete act
 
 ### Requirement: Demo Provides An Idempotent Seed Task
 
-The demo SHALL implement `mix demo.seed` (registered as `aliases: [seed: ["run priv/repo/seeds.exs"]]` or equivalent) that, on a freshly migrated database, creates: (a) one tenant-less email adapter using the configured local SMTP/Mailgun-test credentials, (b) one SMS adapter using a Twilio test SID, (c) the three sequences for the scenarios with their steps/transitions/conditions, (d) one fixture subscriber per scenario, and (e) one HTTP hook with a deterministic local mock-server URL.
+The demo SHALL implement `mix demo.seed` (registered as `aliases: [seed: ["run priv/repo/seeds.exs"]]` or equivalent) that, on a freshly migrated database, creates: (a) local/sandboxed channel adapters, (b) the three sequences for the scenarios with their steps/transitions/conditions, (c) fixture subscribers, and (d) deterministic local mock-hook URLs.
 
 #### Scenario: Idempotent seeding
 - **WHEN** `mix demo.seed` is run twice on the same database
@@ -73,9 +86,9 @@ The demo SHALL implement `mix demo.seed` (registered as `aliases: [seed: ["run p
 
 The demo's `Endpoint` SHALL mount `DripDrop.Web.Router.dripdrop_webhooks("/webhooks/dripdrop")` and `DripDrop.Web.UnsubscribePlug` at `/u/:token`. The demo SHALL configure `unsubscribe_url_builder` and `unsubscribe_secret` so RFC 8058 headers resolve to a working URL during local testing. The demo's mock HTTP-hook server SHALL listen on a deterministic local port set in `demo/config/dev.exs` so seeded HTTP hooks can target it.
 
-#### Scenario: Local one-click unsubscribe round-trip
-- **WHEN** the demo sends an email step with unsubscribe headers enabled through a local Mailgun sandbox and the operator clicks the List-Unsubscribe-Post link
-- **THEN** the demo's unsubscribe handler verifies the signed token, writes a `suppressions` row, and returns `200`.
+#### Scenario: One-click unsubscribe route is wired
+- **WHEN** the demo renders an email step with unsubscribe headers enabled
+- **THEN** the generated List-Unsubscribe URL targets the demo's unsubscribe handler, which verifies the signed token, writes a `suppressions` row, and returns `200`.
 
 #### Scenario: Mock HTTP hook is reachable from seeded sequences
 - **WHEN** an enrollment in `LeadNurtureLive` reaches the lead-score HTTP hook step
@@ -95,15 +108,15 @@ The demo's `mix.exs` SHALL define an alias `quality` running `compile --warnings
 
 ### Requirement: Demo Documents The Run Loop In Its Own README
 
-The demo SHALL ship `demo/README.md` documenting: prerequisites (`asdf`, Docker), `docker compose up -d` from the repo root, `mix setup`, `mix demo.seed`, `mix phx.server`, the URLs of each scenario and dashboard, and how to point the demo at a remote Postgres if Docker is unavailable. The documentation SHALL include the canonical `mix do deps.compile dripdrop, compile` pattern for working against an evolving local library copy. The library's top-level `README.md` SHALL link to `demo/README.md`.
+The demo SHALL ship `demo/README.md` documenting the run loop, local ports, scenario URLs, `/phx-dashboard`, production-safe mocked delivery, short demo timing, and useful commands. The library's top-level `README.md` SHALL link to `demo/README.md`.
 
 #### Scenario: First-time operator can boot the demo
 - **WHEN** an operator follows `demo/README.md` from a clean clone
-- **THEN** they reach a working `http://localhost:4000` with seeded scenarios in under ten minutes, with no manual SQL or undocumented environment variables.
+- **THEN** they reach a working `http://localhost:4012` with seeded scenarios in under ten minutes, with no manual SQL or undocumented environment variables.
 
-#### Scenario: No-Docker fallback is documented
-- **WHEN** an operator's environment prohibits Docker (corporate restriction, CI without Docker support)
-- **THEN** `demo/README.md` documents the alternative path: target an existing Postgres instance via `DATABASE_URL`, run `mix dripdrop.setup --no-cron`, accept that cron-driven steps are disabled, and start the demo as usual; the demo emits a startup warning but boots successfully.
+#### Scenario: Demo README states the delivery boundary
+- **WHEN** an operator reads `demo/README.md`
+- **THEN** the README explains that PubSub dispatches locally while email, SMS, Telegram, and webhooks are rendered or mocked for a production-safe demo.
 
 ### Requirement: Demo Smoke Test Runs As A CI Matrix Entry
 

@@ -4,6 +4,25 @@ defmodule DripDrop.HelpersTest do
 
   alias DripDrop.Helpers
 
+  describe "module_from_string/3" do
+    test "loads a configured module name" do
+      assert Helpers.module_from_string("Elixir.DripDrop.Helpers", :missing) ==
+               {:ok, DripDrop.Helpers}
+
+      assert Helpers.module_from_string("DripDrop.Helpers", :missing) == {:ok, DripDrop.Helpers}
+    end
+
+    test "rejects invalid or unavailable module names" do
+      assert Helpers.module_from_string(nil, :missing) == {:error, :missing}
+
+      assert Helpers.module_from_string("not a module", :missing, :unknown) ==
+               {:error, :unknown}
+
+      assert Helpers.module_from_string("DripDrop.NoSuchModule", :missing, :unknown) ==
+               {:error, :unknown}
+    end
+  end
+
   describe "atom_or_string/1" do
     test "returns existing atoms unchanged" do
       assert Helpers.atom_or_string(:foo) == :foo

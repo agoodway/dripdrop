@@ -141,7 +141,7 @@ defmodule DripDrop.Templates.Renderer do
   defp maybe_compile_mjml(rendered, _channel, _vars), do: {:ok, rendered}
 
   defp compile_mjml(rendered, mjml) do
-    case Mjml.to_html(mjml) do
+    case mjml_to_html(mjml) do
       {:ok, html} -> {:ok, Map.put(rendered, :html, html)}
       {:error, errors} -> {:error, %{kind: :permanent, reason: {:mjml_compile, errors}}}
     end
@@ -178,7 +178,7 @@ defmodule DripDrop.Templates.Renderer do
 
   defp validate_mjml(html) do
     if mjml?(html) do
-      case Mjml.to_html(html) do
+      case mjml_to_html(html) do
         {:ok, _html} -> :ok
         {:error, reason} -> {:error, [{0, 0, inspect(reason)}]}
       end
@@ -191,6 +191,15 @@ defmodule DripDrop.Templates.Renderer do
     do: value |> String.trim_leading() |> String.starts_with?("<mjml")
 
   defp mjml?(_value), do: false
+
+  defp mjml_to_html(html) do
+    if Code.ensure_loaded?(Mjml) and function_exported?(Mjml, :to_html, 1) do
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      apply(Mjml, :to_html, [html])
+    else
+      {:error, :mjml_unavailable}
+    end
+  end
 
   defp mjml_format?(%{config: %{"body_format" => "mjml"}}), do: true
   defp mjml_format?(%{config: %{body_format: "mjml"}}), do: true

@@ -2,7 +2,7 @@ defmodule DripDrop.IngestTest do
   use DripDrop.DataCase, async: false
 
   alias DripDrop.{Enrollment, Fixtures, MessageEvent, StepExecution, Suppression, TestRepo}
-  alias DripDrop.Web.WebhookPlug
+  alias DripDrop.Web.{UnsubscribePlug, WebhookPlug}
 
   defmodule WebhookRouter do
     @moduledoc """
@@ -409,6 +409,52 @@ defmodule DripDrop.IngestTest do
         |> WebhookPlug.call([])
 
       assert conn.status == 413
+    end
+  end
+
+  describe "unsubscribe plug" do
+    setup do
+      previous_secret = Application.get_env(:dripdrop, :unsubscribe_secret, :__missing__)
+      Application.put_env(:dripdrop, :unsubscribe_secret, "test-unsubscribe-secret")
+
+      on_exit(fn ->
+        case previous_secret do
+          :__missing__ -> Application.delete_env(:dripdrop, :unsubscribe_secret)
+          secret -> Application.put_env(:dripdrop, :unsubscribe_secret, secret)
+        end
+      end)
+
+      :ok
+    end
+
+    test "verifies a signed token and stores a one-click suppression" do
+      {:ok, token} =
+        DripDrop.UnsubscribeToken.sign(%{
+          tenant_key: "tenant-a",
+          channel: "email",
+          recipient: "Ada@Example.com"
+        })
+
+      conn =
+        :post
+        |> Plug.Test.conn("/u/#{token}", "")
+        |> Map.put(:path_info, [token])
+        |> UnsubscribePlug.call([])
+
+      assert conn.status == 200
+      assert conn.resp_body == "unsubscribed"
+      assert DripDrop.Suppressions.suppressed?("email", "ada@example.com", "tenant-a")
+    end
+
+    test "rejects invalid tokens without writing suppressions" do
+      conn =
+        :post
+        |> Plug.Test.conn("/u/not-a-token", "")
+        |> Map.put(:path_info, ["not-a-token"])
+        |> UnsubscribePlug.call([])
+
+      assert conn.status == 400
+      refute DripDrop.Suppressions.suppressed?("email", "missing@example.com", "tenant-a")
     end
   end
 

@@ -21,6 +21,9 @@ defmodule DripDrop.ChannelAdaptersTest do
   alias DripDrop.Channels.WhatsApp.CloudAPI
   alias Ecto.Adapters.SQL
 
+  defmodule TestPubSub do
+  end
+
   defmodule ResendProvider do
     @moduledoc """
     Test provider used to assert host-defined channel registration.
@@ -489,6 +492,28 @@ defmodule DripDrop.ChannelAdaptersTest do
           channel: "pubsub",
           provider: "phoenix_pubsub",
           credentials: %{pubsub: pubsub, topic: "dripdrop"}
+        })
+
+      assert {:ok, %{response: %{topic: "dripdrop", event: "welcome"}}} =
+               PhoenixPubSub.deliver(
+                 step("pubsub", %{event: "welcome", payload: %{name: "Ada"}}),
+                 enrollment(),
+                 adapter
+               )
+
+      assert_receive {"welcome", %{name: "Ada"}}
+    end
+
+    test "Phoenix PubSub accepts a JSON-storable module name credential" do
+      pubsub = TestPubSub
+      start_supervised!({Phoenix.PubSub, name: pubsub})
+      Phoenix.PubSub.subscribe(pubsub, "dripdrop")
+
+      adapter =
+        adapter(%{
+          channel: "pubsub",
+          provider: "phoenix_pubsub",
+          credentials: %{"pubsub" => Atom.to_string(pubsub), "topic" => "dripdrop"}
         })
 
       assert {:ok, %{response: %{topic: "dripdrop", event: "welcome"}}} =

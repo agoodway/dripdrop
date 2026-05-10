@@ -1,0 +1,122 @@
+<Layouts.app flash={@flash} current_path="/scenarios/outbound">
+  <div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h1 class="text-3xl font-black tracking-tight text-base-content sm:text-4xl">
+          {@scenario.name}
+        </h1>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-base-content/60">
+          {@scenario.description}
+        </p>
+      </div>
+      <button class="btn btn-primary" phx-click="enroll" disabled={!@sequence_available?}>
+        Enroll 8 Prospects <.icon name="hero-paper-airplane" class="size-5" />
+      </button>
+    </div>
+
+    <section class="grid gap-5 xl:grid-cols-2">
+      <.sequence_flipper
+        title="Sequence steps"
+        subtitle="Follow each step as it queues up, sends, and completes."
+        icon="hero-queue-list"
+        steps={@step_rows}
+        selected_step_key={@selected_step_key}
+        code_open?={@api_mirror_open?}
+        code_title={api_mirror_title(@selected_step_key)}
+        code={api_mirror_snippet(@selected_step_key)}
+      />
+
+      <.sequence_messages_flipper
+        title="Sequence messages"
+        subtitle="Outbound emails appear here as each campaign step is sent."
+        icon="hero-inbox-stack"
+        logs_open?={@sequence_logs_open?}
+        events={@events}
+      >
+        <div class="grid gap-4">
+          <div
+            :for={row <- sent_email_rows(@thread_rows)}
+            role="button"
+            tabindex="0"
+            phx-click="select_step"
+            phx-value-key={row.step_key}
+            class={[
+              "artifact-slide-in overflow-hidden rounded-lg border border-primary/35 bg-base-100 shadow-xl shadow-cyan-950/10 transition-all hover:-translate-y-0.5 hover:border-info/60",
+              selected_step_class(@selected_step_key, row.step_key)
+            ]}
+          >
+            <div class="flex items-center justify-between gap-4 border-b border-base-300 bg-base-200/60 px-4 py-2">
+              <div class="shrink-0">
+                <div class="text-xs font-bold uppercase text-base-content/45">Email</div>
+                <div class="mt-0.5 text-[11px] font-semibold text-primary">{row.step_key}</div>
+              </div>
+              <div class="grid max-w-[min(100%,24rem)] shrink grid-cols-[1.75rem_minmax(0,1fr)_1.75rem] items-center rounded-lg border border-base-300/70 bg-base-100/70 px-1 py-1 shadow-sm">
+                <button
+                  :if={length(@enrollments) > 1}
+                  type="button"
+                  class="btn btn-circle btn-ghost btn-xs text-base-content/55 hover:text-primary"
+                  phx-click="cycle_enrollment"
+                  phx-value-direction="previous"
+                  aria-label="Previous recipient"
+                >
+                  <.icon name="hero-chevron-left" class="size-4" />
+                </button>
+                <div class="min-w-0 px-1 text-center">
+                  <span class="badge badge-sm mx-auto block max-w-full truncate whitespace-nowrap">
+                    {email_recipient(row)}
+                  </span>
+                  <div
+                    :if={length(@enrollments) > 1}
+                    class="mt-1 whitespace-nowrap text-center text-[10px] font-semibold uppercase text-base-content/35"
+                  >
+                    {recipient_position(@enrollments, @selected)}
+                  </div>
+                </div>
+                <button
+                  :if={length(@enrollments) > 1}
+                  type="button"
+                  class="btn btn-circle btn-ghost btn-xs text-base-content/55 hover:text-primary"
+                  phx-click="cycle_enrollment"
+                  phx-value-direction="next"
+                  aria-label="Next recipient"
+                >
+                  <.icon name="hero-chevron-right" class="size-4" />
+                </button>
+              </div>
+            </div>
+            <div class="border-b border-base-300 px-5 py-4">
+              <h3 class="text-lg font-bold tracking-tight text-base-content">
+                {email_subject(row)}
+              </h3>
+              <div class="mt-4 flex items-start gap-3">
+                <span class="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-sm font-black text-primary-content">
+                  G
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div class="text-sm font-semibold text-base-content">Goodway</div>
+                      <div class="text-xs text-base-content/45">{email_sender(row)}</div>
+                    </div>
+                    <div class="text-xs text-base-content/40">just now</div>
+                  </div>
+                  <div class="mt-2 text-xs text-base-content/45">
+                    to {@selected && @selected.first_name} &lt;{email_recipient(row)}&gt;
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="space-y-4 px-5 py-5 text-sm leading-7 text-base-content/80">
+              <p>{email_text(row)}</p>
+              <div class="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 font-mono text-[11px] leading-5 text-cyan-900 dark:border-cyan-900/50 dark:bg-cyan-950/40 dark:text-cyan-100">
+                <div>Message-ID: {row.out_message_id || "-"}</div>
+                <div>In-Reply-To: {row.in_reply_to || "-"}</div>
+                <div>References: {blank_to_dash(row.references)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </.sequence_messages_flipper>
+    </section>
+  </div>
+</Layouts.app>

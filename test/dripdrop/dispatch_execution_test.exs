@@ -258,6 +258,7 @@ defmodule DripDrop.DispatchExecutionTest do
     test "send phase telemetry wraps the provider call", %{recorder: recorder} do
       attach_telemetry([:dripdrop, :dispatch, :phase, :start])
       attach_telemetry([:dripdrop, :dispatch, :phase, :stop])
+      attach_telemetry([:dripdrop, :dispatch, :sent])
 
       %{execution: execution} = dispatch_context(recorder)
 
@@ -271,6 +272,17 @@ defmodule DripDrop.DispatchExecutionTest do
 
       assert step_execution_id == execution.id
       assert is_integer(duration)
+
+      assert_receive {:telemetry, [:dripdrop, :dispatch, :sent], %{count: 1},
+                      %{
+                        phase: :sent,
+                        step_execution_id: ^step_execution_id,
+                        provider_message_id: provider_message_id,
+                        out_message_id: out_message_id
+                      }}
+
+      assert is_binary(provider_message_id)
+      assert is_nil(out_message_id) or is_binary(out_message_id)
     end
 
     test "channel concurrency allows the current worker and defers behind another in-flight row",

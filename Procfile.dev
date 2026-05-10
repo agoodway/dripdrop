@@ -1,2 +1,2 @@
 docker: docker compose up
-server: cd demo && PORT=4011 elixir --sname dripdrop_demo --cookie dripdrop_demo_dev -S mix phx.server
+server: cd demo && PORT=4012 elixir --sname dripdrop_demo --cookie dripdrop_demo_dev -S mix phx.server

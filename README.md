@@ -1,8 +1,8 @@
 # DripDrop
 
-Backend-first, database-driven messaging sequence engine for Elixir.
+Drop-in sequential messaging for Elixir.
 
-DripDrop lets a host app drip multi-step sequences across email, SMS, webhooks, PubSub, Slack, Telegram, and WhatsApp while keeping sequence state, policy decisions, delivery attempts, and provider events in the host database. Schedules dispatch through [PgFlow](https://github.com/agoodway/pgflow) by default, with Oban available for hosts that already run it.
+A backend-first, database-driven messaging sequence engine for Elixir. Drip onboarding, lifecycle nurture, win-back, and outbound campaigns across email, SMS, webhooks, Telegram, and other channels, with Elixir, HTTP, and predicate hooks for decision routing. Outbound mode adds sender pools, per-mailbox ramp schedules, auto-pause on reply, and message threading. Every sequence, enrollment, and delivery event lives in Postgres. Dispatch schedules through [PgFlow](https://github.com/agoodway/pgflow) by default, with Oban available for hosts that already run it.
 
 DripDrop is for sequence/drip messaging — onboarding flows, lifecycle nurtures,
 win-back campaigns, and optional cold outbound drip. Not for one-off
@@ -115,6 +115,7 @@ mix pgflow.gen.postgres_extensions_migration   # add --no-cron if pg_cron unavai
 mix pgflow.gen.pgmq_migration
 mix pgflow.setup
 mix pgflow.gen.job_migration DripDrop.Jobs.DispatchStep
+mix pgflow.gen.job_migration DripDrop.Jobs.CronTick
 
 # DripDrop schema
 mix dripdrop.setup --repo MyApp.Repo
@@ -122,6 +123,10 @@ mix dripdrop.setup --repo MyApp.Repo
 # Apply everything
 mix ecto.migrate
 ```
+
+These PgFlow job migrations install DripDrop's generic scheduler workers once.
+Sequence authoring remains dynamic: new DripDrop sequences, steps, transitions,
+conditions, hooks, and enrollments do not require new PgFlow migrations.
 
 Set `DRIPDROP_ENCRYPTION_KEY` to a base64-encoded 32-byte key before boot.
 Call `DripDrop.startup_check/0` in your host `Application.start/2` callback
@@ -350,6 +355,22 @@ mix dialyzer
 ```
 
 CI runs the suite under Postgres 18 both with and without `pg_cron`.
+
+## Demo App
+
+The demo app lives in [`demo/`](demo/README.md). From the repo root, run it with
+the local Hivemind wrapper:
+
+```bash
+bin/dripdrop start
+bin/dripdrop stop
+bin/dripdrop console
+```
+
+The wrapper runs `Procfile.dev`, starts Docker Postgres, and serves the demo at
+[`localhost:4012`](http://localhost:4012). The demo includes onboarding, lead
+nurture, and cold outbound scenarios using local/sandboxed channels, PubSub, and
+mock HTTP hooks.
 
 ## Guides
 

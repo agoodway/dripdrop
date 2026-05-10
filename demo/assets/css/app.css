@@ -1,0 +1,319 @@
+/* See the Tailwind configuration guide for advanced usage
+   https://tailwindcss.com/docs/configuration */
+
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/dripdrop_demo_web";
+
+/* A Tailwind plugin that makes "hero-#{ICON}" classes available.
+   The heroicons installation itself is managed by your mix.exs */
+@plugin "../vendor/heroicons";
+
+/* daisyUI Tailwind Plugin. You can update this file by fetching the latest version with:
+   curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
+   Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+/* daisyUI theme plugin. You can update this file by fetching the latest version with:
+  curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui-theme.js
+  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
+  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
+@plugin "../vendor/daisyui-theme" {
+  name: "dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(20% 0.035 236);
+  --color-base-200: oklch(16% 0.032 238);
+  --color-base-300: oklch(26% 0.045 232);
+  --color-base-content: oklch(96% 0.025 215);
+  --color-primary: oklch(67% 0.16 223);
+  --color-primary-content: oklch(99% 0.012 210);
+  --color-secondary: oklch(72% 0.13 178);
+  --color-secondary-content: oklch(16% 0.03 220);
+  --color-accent: oklch(71% 0.17 38);
+  --color-accent-content: oklch(18% 0.035 245);
+  --color-neutral: oklch(30% 0.04 233);
+  --color-neutral-content: oklch(96% 0.02 215);
+  --color-info: oklch(76% 0.12 222);
+  --color-info-content: oklch(16% 0.032 238);
+  --color-success: oklch(73% 0.14 166);
+  --color-success-content: oklch(16% 0.032 238);
+  --color-warning: oklch(78% 0.15 75);
+  --color-warning-content: oklch(98% 0.022 95.277);
+  --color-error: oklch(66% 0.21 20);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(99% 0.012 210);
+  --color-base-200: oklch(96% 0.032 214);
+  --color-base-300: oklch(90% 0.052 214);
+  --color-base-content: oklch(23% 0.045 236);
+  --color-primary: oklch(58% 0.17 230);
+  --color-primary-content: oklch(99% 0.012 210);
+  --color-secondary: oklch(68% 0.13 177);
+  --color-secondary-content: oklch(17% 0.04 235);
+  --color-accent: oklch(68% 0.18 37);
+  --color-accent-content: oklch(99% 0.012 210);
+  --color-neutral: oklch(35% 0.05 235);
+  --color-neutral-content: oklch(98% 0.012 210);
+  --color-info: oklch(66% 0.14 223);
+  --color-info-content: oklch(99% 0.012 210);
+  --color-success: oklch(66% 0.13 164);
+  --color-success-content: oklch(99% 0.012 210);
+  --color-warning: oklch(73% 0.16 73);
+  --color-warning-content: oklch(20% 0.035 236);
+  --color-error: oklch(61% 0.21 22);
+  --color-error-content: oklch(96% 0.015 12.422);
+  --radius-selector: 0.25rem;
+  --radius-field: 0.25rem;
+  --radius-box: 0.5rem;
+  --size-selector: 0.21875rem;
+  --size-field: 0.21875rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* Add variants based on LiveView classes */
+@custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
+@custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
+@custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Use the data attribute for dark mode  */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Make LiveView wrapper divs transparent for layout */
+[data-phx-session], [data-phx-teleported-src] { display: contents }
+
+/* This file is for your main application CSS */
+.font-display {
+  font-family: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, oklch(97% 0.034 214) 0%, oklch(99% 0.012 210) 42%, oklch(96% 0.025 190) 100%);
+}
+
+[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, oklch(18% 0.04 238) 0%, oklch(13% 0.035 243) 50%, oklch(17% 0.04 210) 100%);
+}
+
+.dripdrop-wave {
+  background-image:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0 18px,
+      oklch(63% 0.12 220 / 0.08) 18px 20px
+    ),
+    linear-gradient(90deg, oklch(80% 0.12 205 / 0.25), oklch(74% 0.11 177 / 0.18));
+  mask-image: linear-gradient(180deg, black, transparent);
+}
+
+.highlight pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.highlight pre code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.highlight .k,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr,
+.highlight .ow {
+  color: #c678dd;
+}
+
+.highlight .kt,
+.highlight .nb,
+.highlight .nc,
+.highlight .nn {
+  color: #e5c07b;
+}
+
+.highlight .n,
+.highlight .ni,
+.highlight .p,
+.highlight .w {
+  color: #d6deeb;
+}
+
+.highlight .na,
+.highlight .nl,
+.highlight .nt,
+.highlight .nv {
+  color: #ff7b72;
+}
+
+.highlight .nf,
+.highlight .nd {
+  color: #7dd3fc;
+}
+
+.highlight .no,
+.highlight .m,
+.highlight .mb,
+.highlight .mf,
+.highlight .mh,
+.highlight .mi,
+.highlight .mo {
+  color: #f6ad55;
+}
+
+.highlight .o,
+.highlight .ss,
+.highlight .sr {
+  color: #67e8f9;
+}
+
+.highlight .c,
+.highlight .c1,
+.highlight .cm,
+.highlight .cp,
+.highlight .cs {
+  color: #64748b;
+  font-style: italic;
+}
+
+.highlight .s,
+.highlight .s1,
+.highlight .s2,
+.highlight .sa,
+.highlight .sb,
+.highlight .sc,
+.highlight .sd,
+.highlight .sh,
+.highlight .si,
+.highlight .sx {
+  color: #86efac;
+}
+
+.highlight .se {
+  color: #f6ad55;
+}
+
+.highlight .err {
+  color: #f87171;
+}
+
+.json-code .json-key {
+  color: #7dd3fc;
+}
+
+.json-code .json-string {
+  color: #86efac;
+}
+
+.json-code .json-number {
+  color: #f6ad55;
+}
+
+.json-code .json-literal {
+  color: #c084fc;
+}
+
+.artifact-slide-in {
+  animation: artifact-slide-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: left center;
+}
+
+.step-rise-in {
+  animation: step-rise-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.sequence-step-list .step-rise-in:nth-child(2) {
+  animation-delay: 45ms;
+}
+
+.sequence-step-list .step-rise-in:nth-child(3) {
+  animation-delay: 90ms;
+}
+
+.sequence-step-list .step-rise-in:nth-child(4) {
+  animation-delay: 135ms;
+}
+
+.scenario-flip {
+  perspective: 1600px;
+  perspective-origin: 50% 50%;
+}
+
+.scenario-flip-card {
+  transform-style: preserve-3d;
+  transform-origin: center center;
+  transition: transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+
+.scenario-flip-card.is-flipped {
+  transform: rotateY(180deg);
+}
+
+.scenario-flip-face {
+  backface-visibility: hidden;
+  transform: rotateY(0deg);
+}
+
+.scenario-flip-face-back {
+  backface-visibility: hidden;
+  transform: rotateY(180deg);
+}
+
+@keyframes artifact-slide-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-1.5rem, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes step-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .artifact-slide-in,
+  .step-rise-in {
+    animation: none;
+  }
+
+  .scenario-flip-card {
+    transition: none;
+  }
+}

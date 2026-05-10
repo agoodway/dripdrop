@@ -1,0 +1,27 @@
+<Layouts.app flash={@flash} current_path="/">
+  <div class="space-y-10">
+    <section class="grid items-center gap-8 py-6 lg:grid-cols-[1.05fr_0.95fr] lg:py-12">
+      <div>
+        <h1 class="font-display max-w-3xl text-3xl font-black tracking-normal text-balance text-base-content sm:text-4xl lg:text-5xl">
+          Drop-in sequential messaging for Elixir.
+        </h1>
+        <p class="mt-6 max-w-2xl text-lg leading-8 text-base-content/65">
+          A backend-first, database-driven messaging sequence engine for Elixir. Drip onboarding, lifecycle nurture, win-back, and outbound campaigns across email, SMS, webhooks, Telegram, and other channels, with Elixir, HTTP, and predicate hooks for decision routing. Outbound mode adds sender pools, per-mailbox ramp schedules, auto-pause on reply, and message threading. Every sequence, enrollment, and delivery event lives in Postgres.
+        </p>
+      </div>
+
+      <div class="relative">
+        <div class="absolute inset-x-8 top-10 -z-10 h-48 rounded-[48%] bg-cyan-300/30 blur-3xl" />
+        <div class="space-y-4">
+          <Layouts.demo_tile
+            :for={scenario <- @scenarios}
+            name={scenario.name}
+            description={scenario.description}
+            href={scenario.route}
+            icon={scenario.icon}
+          />
+        </div>
+      </div>
+    </section>
+  </div>
+</Layouts.app>

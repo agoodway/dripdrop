@@ -5,9 +5,10 @@ defmodule DripDrop.Hooks.URLGuard do
   The guard enforces a scheme allowlist (https by default; http opt-in via
   `config :dripdrop, :http_hook_allow_http, true`), resolves the host to its
   IP addresses, and rejects any address inside a private, loopback, link-local,
-  CGNAT, or unique-local range. Validation runs both at `HttpHook` create/update
-  time and again after Liquid rendering inside the evaluator, since template
-  variables can rewrite the host.
+  CGNAT, or unique-local range unless
+  `config :dripdrop, :http_hook_allow_private, true` is set. Validation runs
+  both at `HttpHook` create/update time and again after Liquid rendering inside
+  the evaluator, since template variables can rewrite the host.
   """
 
   import Bitwise, only: [&&&: 2, |||: 2, <<<: 2]
@@ -95,9 +96,10 @@ defmodule DripDrop.Hooks.URLGuard do
 
   defp validate_host(host) do
     with {:ok, addrs} <- resolve_addrs(host) do
-      if Enum.any?(addrs, &blocked_ip?/1),
-        do: {:error, :private_address},
-        else: :ok
+      if not Application.get_env(:dripdrop, :http_hook_allow_private, false) and
+           Enum.any?(addrs, &blocked_ip?/1),
+         do: {:error, :private_address},
+         else: :ok
     end
   end
 

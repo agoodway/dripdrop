@@ -410,6 +410,12 @@ defmodule DripDrop.Jobs.DispatchStep do
       end)
 
     with {:ok, %{sent: sent}} <- Repo.transaction(multi) do
+      :telemetry.execute(
+        [:dripdrop, :dispatch, :sent],
+        %{count: 1},
+        sent_telemetry_metadata(context, adapter, sent)
+      )
+
       advance(context, sent)
     end
   end
@@ -789,6 +795,16 @@ defmodule DripDrop.Jobs.DispatchStep do
       adapter_provider: adapter.provider,
       tenant_key: context.execution.tenant_key
     }
+  end
+
+  defp sent_telemetry_metadata(context, adapter, sent) do
+    context
+    |> telemetry_metadata(adapter, :sent)
+    |> Map.merge(%{
+      step_execution_id: sent.id,
+      provider_message_id: sent.provider_message_id,
+      out_message_id: sent.out_message_id
+    })
   end
 
   defp schedule_next_step(enrollment, step) do
