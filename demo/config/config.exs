@@ -9,7 +9,9 @@ import Config
 
 config :dripdrop_demo,
   ecto_repos: [DripdropDemo.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  demo_time_scale: 0.0001,
+  mock_hooks_port: 4013
 
 config :dripdrop,
   repo: DripdropDemo.Repo,
@@ -22,7 +24,7 @@ config :dripdrop,
   unsubscribe_secret:
     System.get_env("DRIPDROP_DEMO_UNSUBSCRIBE_SECRET") ||
       :crypto.hash(:sha256, "dripdrop-demo-local-unsubscribe") |> Base.encode16(case: :lower),
-  unsubscribe_url_builder: fn %{token: token} -> "http://localhost:4012/u/#{token}" end,
+  unsubscribe_url_builder: {DripdropDemo.Unsubscribe, :build_url},
   unsubscribe_mailto: "unsubscribe@dripdrop.dev"
 
 config :dripdrop, :pgflow, jobs: [DripDrop.Jobs.DispatchStep, DripDrop.Jobs.CronTick]

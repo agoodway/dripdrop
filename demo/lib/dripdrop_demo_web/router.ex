@@ -21,7 +21,7 @@ defmodule DripdropDemoWeb.Router do
           "script-src 'self' 'unsafe-inline'; " <>
           "style-src 'self' 'unsafe-inline'; " <>
           "img-src 'self' data:; " <>
-          "connect-src 'self' ws://localhost:4012 http://localhost:4012"
+          "connect-src 'self'"
     }
   end
 

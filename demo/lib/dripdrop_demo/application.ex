@@ -60,7 +60,14 @@ defmodule DripdropDemo.Application do
     end
   end
 
-  defp register_demo_channels do
+  @doc """
+  Registers demo-only channel providers with the DripDrop channel registry.
+
+  Called from the application start callback and also from
+  `DripdropDemo.Release.seed/0` so seeds can insert adapters that reference
+  these providers without booting the full app.
+  """
+  def register_demo_channels do
     Channels.register(:telegram, :local, LocalTelegram)
   end
 

@@ -3,6 +3,10 @@ defmodule DripdropDemo.Release do
   Used for executing DB release tasks when run in production without Mix
   installed.
   """
+
+  alias DripDrop.Vault
+  alias DripdropDemo.Application, as: DemoApplication
+
   @app :dripdrop_demo
 
   def migrate do
@@ -17,7 +21,12 @@ defmodule DripdropDemo.Release do
     load_app()
 
     for repo <- repos() do
-      {:ok, _, _} = Ecto.Migrator.with_repo(repo, &load_seeds/1)
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(repo, fn repo ->
+          {:ok, _pid} = Vault.start_link()
+          :ok = DemoApplication.register_demo_channels()
+          load_seeds(repo)
+        end)
     end
   end
 

@@ -20,11 +20,16 @@ config :dripdrop_demo, DripdropDemoWeb.Endpoint,
     ]
   ]
 
-# Configure Swoosh API Client
-config :swoosh, api_client: Swoosh.ApiClient.Req
+# Keep the deployed demo fully self-contained: run the loopback mock-hooks
+# server on 127.0.0.1 so seeded HTTP/webhook/Slack adapters resolve without
+# making any external API calls.
+config :dripdrop_demo, start_mock_hooks?: true
 
-# Disable Swoosh Local Memory Storage
-config :swoosh, local: false
+# Swoosh API client is configured for any future HTTP-based adapter. The
+# active mailer (set in config.exs) is `Swoosh.Adapters.Local`, which keeps
+# emails in memory so the demo can preview them.
+config :swoosh, api_client: Swoosh.ApiClient.Req
+config :swoosh, local: true
 
 # Do not print debug messages in production
 config :logger, level: :info
