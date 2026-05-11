@@ -570,6 +570,9 @@ lead_version.id
 |> SequenceAuthoring.activate_sequence_version()
 |> unwrap.()
 
+# Sender daily_cap and min_gap_seconds MUST match
+# DripdropDemo.Scenarios.Outbound.daily_cap_default/0 and min_gap_default/0,
+# which are also used by the scenario's "Reset capacity" button.
 outbound_adapters =
   [
     {"Goodway Alex", "alex@goodway.dev"},
@@ -583,7 +586,7 @@ outbound_adapters =
       provider: "local",
       is_default: false,
       credentials: %{"from" => "#{name} <#{email}>"},
-      daily_cap: 100,
+      daily_cap: 45,
       min_gap_seconds: 2
     })
   end)

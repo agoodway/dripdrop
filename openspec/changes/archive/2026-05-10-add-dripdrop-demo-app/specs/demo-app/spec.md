@@ -36,15 +36,31 @@ Each LiveView SHALL provide a form to enroll one or more fixture subscribers, di
 
 ### Requirement: OutboundLive Demonstrates Sender Pools And Threaded Email
 
-`OutboundLive` at `/scenarios/outbound` SHALL exercise the cold-outbound public-API surface against the seeded `cold_drip_pool` and a 3-step outbound sequence configured with `mode: :outbound` and `config["pool_id"]`. The LiveView SHALL use the same scenario layout as onboarding and lead nurture: sequence steps/code, sequence messages, and runtime logs. The sequence messages panel SHALL show the outbound email thread and allow cycling through enrolled recipients.
+`OutboundLive` at `/scenarios/outbound` SHALL exercise the cold-outbound public-API surface against the seeded `outbound_pool` and a 3-step outbound sequence configured with `mode: :outbound` and `config["pool_id"]`. The LiveView SHALL use the same scenario layout as onboarding and lead nurture: sequence steps/code, sequence messages, and runtime logs. The sequence messages panel SHALL render the threaded outbound emails with `Message-ID`, `In-Reply-To`, and `References` headers visible. Enrolled prospects SHALL be presented in an at-a-glance grid (one card per prospect) so pool dispatch parallelism is visible — clicking a card drives the message detail pane below.
 
-#### Scenario: WDRR distributes cold-drip enrollments across the pool
-- **WHEN** an operator clicks "Enroll 8 prospects" on `/scenarios/outbound`
-- **THEN** eight enrollments are created with `effective_mode: :outbound` and `adapter_id` pinned by WDRR; the enrollment table shows the pinned adapter for each row, and at least one enrollment is pinned to each of the three pool members (≥1 per adapter over 8 enrollments at weight 1).
+#### Scenario: WDRR distributes outbound enrollments across the pool
+- **WHEN** an operator clicks "Outbound Campaign" on `/scenarios/outbound`
+- **THEN** eight enrollments are created with `effective_mode: :outbound` and `adapter_id` pinned by WDRR; each prospect card displays its pinned adapter via `pin_breadcrumb`, and at least one enrollment is pinned to each of the three pool members (≥1 per adapter over 8 enrollments at weight 1).
 
 #### Scenario: Threading chain is visible in the message panel
 - **WHEN** an enrollment has progressed through at least two steps
-- **THEN** the message panel lists the email thread in order and exposes the current `Message-ID`, `In-Reply-To`, and `References` values for the selected recipient.
+- **THEN** the message detail pane lists the email thread in order and exposes the current `Message-ID`, `In-Reply-To`, and `References` values for the selected recipient.
+
+### Requirement: OutboundLive Demonstrates Sender Pool Dynamics And Operator Outcomes
+
+`OutboundLive` SHALL render a sender pool panel above the prospect grid showing per-sender health pill, capacity bar (`sent_today / effective_cap_today`), min-gap meter, and an operator control strip (Activate / Probe / Rest). The demo SHALL provide eight scripted outcomes — one per prospect — that exercise the library's reply ingestion, suppression, ramp cap, and pool failover paths via a `DripdropDemo.Scenarios.Outbound.Simulators` module that wraps `DripDrop.ingest_inbound_message/2`, `DripDrop.suppress/1`, `DripDrop.set_adapter_health/2`, and direct `MessageEvent` inserts (for hard/soft bounce; the only place outside the library that touches `MessageEvent` rows directly).
+
+#### Scenario: Sender pool panel reflects health changes via PubSub
+- **WHEN** `DripDrop.set_adapter_health/2` flips a pool member to `:resting`
+- **THEN** the pool panel re-renders within ~200ms (driven by `[:dripdrop, :health, :state_changed]` telemetry → `adapter:<id>` PubSub topic) and shows the resting state.
+
+#### Scenario: Scripted outcomes resolve via auto-play timer
+- **WHEN** the operator clicks "Outbound Campaign" and the first send for each prospect lands as `[:dripdrop, :dispatch, :sent]`
+- **THEN** an `:autoplay_outcome` message is scheduled per enrollment via `Process.send_after/3`, which then invokes `Simulators.trigger/2` with that prospect's mapped outcome (e.g., Eli → `:hard_bounce` produces a `MessageEvent` with `event_type: "bounced"` plus a `Suppression` row; Quinn → `:rest_pinned_sender` rests the pinned adapter triggering a pool rebind).
+
+#### Scenario: Reset capacity restores fresh state
+- **WHEN** an operator clicks "Reset capacity" on the sender pool panel
+- **THEN** today's `sent` `MessageEvent` rows for pool adapters are backdated out of the day and adapter caps are restored from `Outbound.daily_cap_default/0` and `Outbound.min_gap_default/0`; the panel renders `0/<daily_cap>` capacity bars.
 
 ### Requirement: Demo Uses Short Observable Timing
 
@@ -102,9 +118,6 @@ The demo's `mix.exs` SHALL define an alias `quality` running `compile --warnings
 - **WHEN** an operator runs `mix quality` from `demo/` on a clean checkout after `mix setup`
 - **THEN** all sub-commands exit 0.
 
-#### Scenario: Demo CI is independent of library CI
-- **WHEN** the library's main CI matrix runs (`mix quality`, `mix test`, `mix dialyzer` from the repo root)
-- **THEN** demo-side quality issues do NOT cause the library's main CI to fail. Demo CI runs as a separate matrix entry that only fires when `demo/**` files change or on a release-tagged commit.
 
 ### Requirement: Demo Documents The Run Loop In Its Own README
 
@@ -118,14 +131,3 @@ The demo SHALL ship `demo/README.md` documenting the run loop, local ports, scen
 - **WHEN** an operator reads `demo/README.md`
 - **THEN** the README explains that PubSub dispatches locally while email, SMS, Telegram, and webhooks are rendered or mocked for a production-safe demo.
 
-### Requirement: Demo Smoke Test Runs As A CI Matrix Entry
-
-The repository SHALL include a CI step (`make ci-demo` or equivalent invoked from `.github/workflows/ci.yml`) that: (a) runs `docker compose up -d` from the repo root, (b) `cd demo`, (c) `mix setup`, (d) `mix demo.seed`, (e) `mix test`, (f) `mix quality`. The step SHALL run on every PR that touches `demo/**` and on every release-tagged commit. Library-only changes (no `demo/**` files touched) SHALL NOT trigger the demo CI step.
-
-#### Scenario: Demo CI runs on a demo-touching PR
-- **WHEN** a PR modifies `demo/lib/dripdrop_demo_web/live/scenarios/onboarding_live.ex`
-- **THEN** the CI workflow runs the demo smoke step in addition to the library's main matrix; both must pass for the PR to be mergeable.
-
-#### Scenario: Library-only PR skips demo CI
-- **WHEN** a PR modifies only `lib/dripdrop/**` and `test/dripdrop/**` with no `demo/**` files touched
-- **THEN** the demo CI step is skipped; only the library's main CI matrix runs.

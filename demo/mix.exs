@@ -41,7 +41,8 @@ defmodule DripdropDemo.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:dripdrop, path: ".."},
+      {:dripdrop, "~> 0.1.0"},
+      # {:dripdrop, path: ".."},
       {:phoenix, "~> 1.8.5"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},

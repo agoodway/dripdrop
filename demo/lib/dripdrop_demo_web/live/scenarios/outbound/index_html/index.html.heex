@@ -9,10 +9,28 @@
           {@scenario.description}
         </p>
       </div>
-      <button class="btn btn-primary" phx-click="enroll" disabled={!@sequence_available?}>
-        Enroll 8 Prospects <.icon name="hero-paper-airplane" class="size-5" />
-      </button>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn btn-outline" phx-click="enroll" disabled={!@sequence_available?}>
+          Outbound Campaign <.icon name="hero-play-circle" class="size-5" />
+        </button>
+      </div>
     </div>
+
+    <.sender_pool_panel members={@pool_members} now={@now} />
+
+    <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <.prospect_card
+        :for={enrollment <- @enrollments}
+        enrollment={enrollment}
+        selected?={@selected && @selected.id == enrollment.id}
+      />
+      <div
+        :if={@enrollments == []}
+        class="rounded-lg border border-dashed border-base-300 bg-base-100 p-6 text-sm text-base-content/50 sm:col-span-2 lg:col-span-4"
+      >
+        Enroll prospects to see the outbound outcome grid.
+      </div>
+    </section>
 
     <section class="grid gap-5 xl:grid-cols-2">
       <.sequence_flipper
@@ -35,6 +53,12 @@
       >
         <div class="grid gap-4">
           <div
+            :if={@selected && sent_email_rows(@thread_rows) == []}
+            class="rounded-lg border border-dashed border-base-300 bg-base-100 p-6 text-sm text-base-content/50"
+          >
+            No messages yet for {@selected.first_name}. The first sent email will appear here.
+          </div>
+          <div
             :for={row <- sent_email_rows(@thread_rows)}
             role="button"
             tabindex="0"
@@ -50,38 +74,15 @@
                 <div class="text-xs font-bold uppercase text-base-content/45">Email</div>
                 <div class="mt-0.5 text-[11px] font-semibold text-primary">{row.step_key}</div>
               </div>
-              <div class="grid max-w-[min(100%,24rem)] shrink grid-cols-[1.75rem_minmax(0,1fr)_1.75rem] items-center rounded-lg border border-base-300/70 bg-base-100/70 px-1 py-1 shadow-sm">
-                <button
-                  :if={length(@enrollments) > 1}
-                  type="button"
-                  class="btn btn-circle btn-ghost btn-xs text-base-content/55 hover:text-primary"
-                  phx-click="cycle_enrollment"
-                  phx-value-direction="previous"
-                  aria-label="Previous recipient"
-                >
-                  <.icon name="hero-chevron-left" class="size-4" />
-                </button>
-                <div class="min-w-0 px-1 text-center">
-                  <span class="badge badge-sm mx-auto block max-w-full truncate whitespace-nowrap">
-                    {email_recipient(row)}
-                  </span>
-                  <div
-                    :if={length(@enrollments) > 1}
-                    class="mt-1 whitespace-nowrap text-center text-[10px] font-semibold uppercase text-base-content/35"
-                  >
-                    {recipient_position(@enrollments, @selected)}
-                  </div>
-                </div>
-                <button
-                  :if={length(@enrollments) > 1}
-                  type="button"
-                  class="btn btn-circle btn-ghost btn-xs text-base-content/55 hover:text-primary"
-                  phx-click="cycle_enrollment"
-                  phx-value-direction="next"
-                  aria-label="Next recipient"
-                >
-                  <.icon name="hero-chevron-right" class="size-4" />
-                </button>
+              <div class="flex min-w-0 flex-col items-end gap-1">
+                <span class="badge badge-sm max-w-64 truncate whitespace-nowrap">
+                  {email_recipient(row)}
+                </span>
+                <.pin_breadcrumb
+                  sender={email_sender(row)}
+                  email={@selected && @selected.sender_email}
+                  provider={@selected && @selected.adapter_provider}
+                />
               </div>
             </div>
             <div class="border-b border-base-300 px-5 py-4">

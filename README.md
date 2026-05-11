@@ -1,6 +1,10 @@
 # DripDrop
 
-Drop-in sequential messaging for Elixir.
+[![Hex.pm](https://img.shields.io/hexpm/v/dripdrop.svg)](https://hex.pm/packages/dripdrop)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/dripdrop)
+[![License](https://img.shields.io/hexpm/l/dripdrop.svg)](https://github.com/agoodway/dripdrop/blob/main/LICENSE)
+
+> Drop-in sequential messaging for Elixir.
 
 A backend-first, database-driven messaging sequence engine for Elixir. Drip onboarding, lifecycle nurture, win-back, and outbound campaigns across email, SMS, webhooks, Telegram, and other channels, with Elixir, HTTP, and predicate hooks for decision routing. Outbound mode adds sender pools, per-mailbox ramp schedules, auto-pause on reply, and message threading. Every sequence, enrollment, and delivery event lives in Postgres. Dispatch schedules through [PgFlow](https://github.com/agoodway/pgflow) by default, with Oban available for hosts that already run it.
 

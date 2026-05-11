@@ -204,7 +204,7 @@ defmodule DripdropDemoWeb.Layouts do
     <div class="flex items-center gap-4">
       <div class="min-w-0 flex-1">
         <span class="grid size-11 place-items-center rounded-lg bg-info/10 text-info">
-          <.icon name={@icon} class="size-5" />
+          <.demo_tile_icon icon={@icon} class="size-5" />
         </span>
         <div class="mt-5">
           <div class="text-sm font-bold text-base-content">{@name}</div>
@@ -218,6 +218,33 @@ defmodule DripdropDemoWeb.Layouts do
         <.icon name="hero-arrow-right" class="size-5" />
       </span>
     </div>
+    """
+  end
+
+  attr(:icon, :string, required: true)
+  attr(:class, :string, default: nil)
+
+  def demo_tile_icon(%{icon: "hero-rocket-launch"} = assigns) do
+    ~H"""
+    <.icon name="hero-rocket-launch" class={@class} />
+    """
+  end
+
+  def demo_tile_icon(%{icon: "hero-map"} = assigns) do
+    ~H"""
+    <.icon name="hero-map" class={@class} />
+    """
+  end
+
+  def demo_tile_icon(%{icon: "hero-paper-airplane"} = assigns) do
+    ~H"""
+    <.icon name="hero-paper-airplane" class={@class} />
+    """
+  end
+
+  def demo_tile_icon(assigns) do
+    ~H"""
+    <.icon name={@icon} class={@class} />
     """
   end
 

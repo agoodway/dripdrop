@@ -4,6 +4,7 @@ defmodule DripDrop.Channels.Webhook.Standard do
   """
 
   alias DripDrop.Channels.Helpers
+  alias DripDrop.Channels.Webhook.Signer
 
   @doc """
   Returns Req options for sending a signed Standard Webhooks request.
@@ -15,7 +16,7 @@ defmodule DripDrop.Channels.Webhook.Standard do
     secret = adapter |> Helpers.credential(:secret) |> normalize_secret()
     body = Jason.encode!(payload)
 
-    signature = StandardWebhooks.sign(webhook_id, timestamp, payload, secret)
+    signature = Signer.sign(webhook_id, timestamp, payload, secret)
 
     [
       method: method,

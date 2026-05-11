@@ -41,11 +41,9 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, path: "../pgflow"},
-      {:ecto_evolver,
-       github: "agoodway/ecto_evolver",
-       ref: "cef2428838ebb784dfc27dc8d032a5488448a413",
-       override: true},
+      {:pgflow, "~> 0.1.0"},
+      # {:pgflow, path: "../pgflow"},
+      {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
       {:predicated, "~> 1.1"},
@@ -58,10 +56,6 @@ defmodule DripDrop.MixProject do
       {:telemetry, "~> 1.3"},
       {:ex_phone_number, "~> 0.4"},
       {:ex_email, "~> 1.0"},
-      {:standard_webhooks,
-       git: "https://github.com/standard-webhooks/standard-webhooks.git",
-       sparse: "libraries/elixir",
-       ref: "3afa6683f8b27ca7d5594d248bf51ee05a129a10"},
 
       # Optional channel/template dependencies
       {:swoosh, "~> 1.19", optional: true},
@@ -114,7 +108,7 @@ defmodule DripDrop.MixProject do
 
   defp package do
     [
-      maintainers: ["DripDrop Team"],
+      maintainers: ["Chase Pursley"],
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files: ~w(

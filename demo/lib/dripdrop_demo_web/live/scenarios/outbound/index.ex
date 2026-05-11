@@ -5,10 +5,12 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
 
   use DripdropDemoWeb, :live_view
 
+  import DripdropDemoWeb.OutboundComponents
   import DripdropDemoWeb.ScenarioComponents
 
   alias DripdropDemo.ScenarioCatalog
   alias DripdropDemo.Scenarios.Outbound
+  alias DripdropDemo.Scenarios.Outbound.Simulators
   alias DripdropDemo.ScenarioSteps
 
   embed_templates("index_html/*")
@@ -24,13 +26,21 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
     "consulting-follow-up" => "bg-cyan-500/15 text-cyan-700 dark:text-cyan-200",
     "consulting-final-bump" => "bg-cyan-500/15 text-cyan-700 dark:text-cyan-200"
   }
+  @autoplay_base_ms 1_000
 
   @impl Phoenix.LiveView
   def render(assigns), do: index(assigns)
 
   @impl Phoenix.LiveView
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Phoenix.PubSub.subscribe(DripdropDemo.PubSub, "dripdrop:events")
+    pool_members =
+      if connected?(socket), do: Outbound.list_pool_members(), else: []
+
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(DripdropDemo.PubSub, "dripdrop:events")
+      subscribe_adapter_topics(pool_members)
+      Process.send_after(self(), :tick, 1_000)
+    end
 
     scenario = ScenarioCatalog.fetch!(:outbound_campaigns)
 
@@ -39,10 +49,13 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
       |> assign(:page_title, "#{scenario.name} Scenario")
       |> assign(:scenario, scenario)
       |> assign(:enrollments, [])
-      |> assign(:pool_members, Outbound.list_pool_members())
+      |> assign(:pool_members, pool_members)
       |> assign(:events, [])
       |> assign(:selected_enrollment_id, nil)
       |> assign(:selected_step_key, nil)
+      |> assign(:now, DateTime.utc_now(:second))
+      |> assign(:autoplay_timers, %{})
+      |> assign(:triggered_outcome_ids, MapSet.new())
       |> assign(:api_mirror_open?, false)
       |> assign(:sequence_logs_open?, false)
       |> assign(:sequence_available?, Outbound.sequence_available?())
@@ -55,10 +68,12 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
   def handle_event("enroll", _params, socket) do
     case Outbound.enroll_prospects() do
       {:ok, enrollments} ->
+        enrollment_rows = Outbound.list_enrollments(Enum.map(enrollments, & &1.id))
+
         {:noreply,
          socket
          |> put_flash(:info, "Outbound campaign started")
-         |> assign(:enrollments, Outbound.list_enrollments(Enum.map(enrollments, & &1.id)))
+         |> assign(:enrollments, enrollment_rows)
          |> assign(:pool_members, Outbound.list_pool_members())
          |> assign(:selected_enrollment_id, enrollments |> List.first() |> then(&(&1 && &1.id)))
          |> assign(:selected_step_key, nil)
@@ -79,18 +94,32 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
   end
 
   @impl Phoenix.LiveView
-  def handle_event("cycle_enrollment", %{"direction" => direction}, socket) do
-    selected_id =
-      cycled_enrollment_id(
-        socket.assigns.enrollments,
-        socket.assigns.selected_enrollment_id,
-        direction
-      )
+  def handle_event("set_sender_state", %{"id" => id, "state" => state}, socket) do
+    with {:ok, state} <- sender_state_from_param(state),
+         :ok <- Simulators.set_adapter_state(id, state) do
+      {:noreply, refresh_outbound_state(socket)}
+    else
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Sender update failed: #{inspect(reason)}")}
+    end
+  end
 
-    {:noreply,
-     socket
-     |> assign(:selected_enrollment_id, selected_id)
-     |> assign_thread()}
+  @impl Phoenix.LiveView
+  def handle_event("reset_capacity_today", _params, socket) do
+    case Outbound.reset_capacity_today() do
+      {:ok, %{sent_events: sent_events}} ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Sender capacity reset (#{sent_events} sent events moved out of today)"
+         )
+         |> refresh_outbound_state()
+         |> assign_thread()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Capacity reset failed: #{inspect(reason)}")}
+    end
   end
 
   @impl Phoenix.LiveView
@@ -111,30 +140,138 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
   @impl Phoenix.LiveView
   def handle_info({:dripdrop_event, event, measurements, metadata}, socket) do
     tracked_ids = Enum.map(socket.assigns.enrollments, & &1.id)
+    tracked_adapter_ids = Enum.map(socket.assigns.pool_members, & &1.id)
 
     socket =
-      if metadata[:enrollment_id] in tracked_ids do
-        enrollments = Outbound.list_enrollments(tracked_ids)
+      cond do
+        metadata[:enrollment_id] in tracked_ids ->
+          socket
+          |> refresh_outbound_state()
+          |> maybe_schedule_autoplay_from_event(event, metadata)
+          |> append_event(%{
+            event: Enum.join(event, "."),
+            measurements: measurements,
+            metadata: metadata,
+            received_at: DateTime.utc_now()
+          })
+          |> assign_thread()
 
-        socket
-        |> assign(:enrollments, enrollments)
-        |> assign(:pool_members, Outbound.list_pool_members())
-        |> assign(
-          :selected_enrollment_id,
-          preferred_enrollment_id(enrollments, socket.assigns.selected_enrollment_id)
-        )
-        |> append_event(%{
-          event: Enum.join(event, "."),
-          measurements: measurements,
-          metadata: metadata,
-          received_at: DateTime.utc_now()
-        })
-        |> assign_thread()
-      else
-        socket
+        metadata[:adapter_id] in tracked_adapter_ids ->
+          socket
+          |> assign(:pool_members, Outbound.list_pool_members())
+          |> append_event(%{
+            event: Enum.join(event, "."),
+            measurements: measurements,
+            metadata: metadata,
+            received_at: DateTime.utc_now()
+          })
+
+        true ->
+          socket
       end
 
     {:noreply, socket}
+  end
+
+  @impl Phoenix.LiveView
+  def handle_info(:tick, socket) do
+    Process.send_after(self(), :tick, 1_000)
+    {:noreply, assign(socket, :now, DateTime.utc_now(:second))}
+  end
+
+  @impl Phoenix.LiveView
+  def handle_info({:autoplay_outcome, enrollment_id}, socket) do
+    socket = drop_autoplay_timer(socket, enrollment_id)
+
+    case Enum.find(socket.assigns.enrollments, &(&1.id == enrollment_id)) do
+      %{outcome: :ghost} ->
+        {:noreply, mark_triggered(socket, enrollment_id)}
+
+      %{outcome: outcome} ->
+        case Simulators.trigger(enrollment_id, outcome) do
+          :ok ->
+            {:noreply,
+             socket
+             |> mark_triggered(enrollment_id)
+             |> refresh_outbound_state()
+             |> assign_thread()}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Campaign outcome failed: #{inspect(reason)}")}
+        end
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  defp refresh_outbound_state(socket) do
+    tracked_ids = Enum.map(socket.assigns.enrollments, & &1.id)
+
+    if tracked_ids == [] do
+      assign(socket, :pool_members, Outbound.list_pool_members())
+    else
+      enrollments = Outbound.list_enrollments(tracked_ids)
+
+      socket
+      |> assign(:enrollments, enrollments)
+      |> assign(:pool_members, Outbound.list_pool_members())
+      |> assign(
+        :selected_enrollment_id,
+        preferred_enrollment_id(enrollments, socket.assigns.selected_enrollment_id)
+      )
+    end
+  end
+
+  defp maybe_schedule_autoplay_from_event(socket, [:dripdrop, :dispatch, :sent], %{
+         enrollment_id: enrollment_id,
+         step_key: "consulting-intro"
+       }) do
+    maybe_schedule_autoplay(socket, enrollment_id)
+  end
+
+  defp maybe_schedule_autoplay_from_event(socket, _event, _metadata), do: socket
+
+  defp maybe_schedule_autoplay(socket, enrollment_id) do
+    triggered? = MapSet.member?(socket.assigns.triggered_outcome_ids, enrollment_id)
+    queued? = Map.has_key?(socket.assigns.autoplay_timers, enrollment_id)
+    enrollment = Enum.find(socket.assigns.enrollments, &(&1.id == enrollment_id))
+
+    if triggered? or queued? or is_nil(enrollment) or enrollment.outcome == :ghost do
+      socket
+    else
+      ref =
+        Process.send_after(
+          self(),
+          {:autoplay_outcome, enrollment_id},
+          @autoplay_base_ms + :rand.uniform(2_000)
+        )
+
+      update(socket, :autoplay_timers, &Map.put(&1, enrollment_id, ref))
+    end
+  end
+
+  defp drop_autoplay_timer(socket, enrollment_id) do
+    update(socket, :autoplay_timers, &Map.delete(&1, enrollment_id))
+  end
+
+  defp mark_triggered(socket, enrollment_id) do
+    update(socket, :triggered_outcome_ids, &MapSet.put(&1, enrollment_id))
+  end
+
+  defp sender_state_from_param("active"), do: {:ok, :active}
+  defp sender_state_from_param("resting"), do: {:ok, :resting}
+  defp sender_state_from_param("probing"), do: {:ok, :probing}
+  defp sender_state_from_param("ramping"), do: {:ok, :ramping}
+  defp sender_state_from_param(_state), do: {:error, :unknown_sender_state}
+
+  # Pool membership is stable for the demo (`reset_capacity_today` only updates
+  # existing adapters, never adds/removes). If membership becomes dynamic, add
+  # re-subscribe logic here that diffs old vs new ids.
+  defp subscribe_adapter_topics(pool_members) do
+    Enum.each(pool_members, fn member ->
+      Phoenix.PubSub.subscribe(DripdropDemo.PubSub, "adapter:#{member.id}")
+    end)
   end
 
   defp assign_thread(socket) do
@@ -157,14 +294,6 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
       update(socket, :events, fn events ->
         Enum.take(events ++ [event], -@event_log_limit)
       end)
-
-  defp sequence_steps(nil), do: sequence_steps([])
-
-  defp sequence_steps(enrollment_id) when is_binary(enrollment_id) do
-    enrollment_id
-    |> Outbound.latest_thread_rows()
-    |> sequence_steps()
-  end
 
   defp sequence_steps(rows) when is_list(rows) do
     @sequence_key
@@ -210,48 +339,7 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
 
   defp preferred_enrollment_id(enrollments, selected_id) do
     selected = selected_enrollment(enrollments, selected_id)
-
-    if selected && sent_email_rows(Outbound.latest_thread_rows(selected.id)) != [] do
-      selected.id
-    else
-      preferred =
-        Enum.find(enrollments, fn enrollment ->
-          sent_email_rows(Outbound.latest_thread_rows(enrollment.id)) != []
-        end)
-
-      (preferred && preferred.id) || (selected && selected.id)
-    end
-  end
-
-  defp cycled_enrollment_id([], _selected_id, _direction), do: nil
-
-  defp cycled_enrollment_id(enrollments, selected_id, direction) do
-    selected_index = selected_enrollment_index(enrollments, selected_id)
-    last_index = length(enrollments) - 1
-
-    next_index =
-      case direction do
-        "previous" -> if selected_index == 0, do: last_index, else: selected_index - 1
-        "next" -> if selected_index == last_index, do: 0, else: selected_index + 1
-        _direction -> selected_index
-      end
-
-    enrollments
-    |> Enum.at(next_index)
-    |> Map.get(:id)
-  end
-
-  defp selected_enrollment_index([], _selected_id), do: 0
-
-  defp selected_enrollment_index(enrollments, selected_id) do
-    Enum.find_index(enrollments, &(&1.id == selected_id)) || 0
-  end
-
-  defp recipient_position([], _selected), do: "0 of 0"
-
-  defp recipient_position(enrollments, selected) do
-    index = selected_enrollment_index(enrollments, selected && selected.id)
-    "#{index + 1} of #{length(enrollments)}"
+    selected && selected.id
   end
 
   defp executed_at(%{executed_at: executed_at}), do: executed_at
@@ -322,8 +410,8 @@ defmodule DripdropDemoWeb.Scenarios.OutboundLive do
             provider: "local",
             is_default: false,
             credentials: %{"from" => "\#{name} <\#{email}>"},
-            daily_cap: 100,
-            min_gap_seconds: 2
+            daily_cap: #{Outbound.daily_cap_default()},
+            min_gap_seconds: #{Outbound.min_gap_default()}
           })
 
         adapter

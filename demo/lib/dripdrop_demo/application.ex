@@ -9,6 +9,7 @@ defmodule DripdropDemo.Application do
   alias DripDrop.Channels
   alias DripDrop.Jobs.{CronTick, DispatchStep}
   alias DripdropDemo.Channels.Telegram.Local, as: LocalTelegram
+  alias DripdropDemo.Jobs.PruneSequenceRuns
 
   @start_mock_hooks? Application.compile_env(:dripdrop_demo, :start_mock_hooks?, false)
 
@@ -21,7 +22,7 @@ defmodule DripdropDemo.Application do
         DripdropDemo.Repo,
         {PgFlow,
          repo: DripdropDemo.Repo,
-         jobs: [DispatchStep, CronTick],
+         jobs: [DispatchStep, CronTick, PruneSequenceRuns],
          signal_strategy: :notify,
          notify_throttle_ms: 50,
          notify_fallback_interval: 250},
