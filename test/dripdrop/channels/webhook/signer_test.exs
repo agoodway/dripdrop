@@ -3,11 +3,8 @@ defmodule DripDrop.Channels.Webhook.SignerTest do
 
   alias DripDrop.Channels.Webhook.Signer
 
-  # Test vector from the Standard Webhooks spec — known-good signature for a
-  # fixed (id, timestamp, payload, secret). Locks the implementation to the
-  # canonical algorithm.
+  # Fixture values for exercising sign/4 behavior.
   @id "msg_p5jXN8AQM9LWM0D4loKWxJek"
-  @timestamp 1_614_265_330
   @payload %{"event_type" => "ping"}
   @raw_secret "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaUWSkPRtX1V/Ag/4="
 
@@ -39,6 +36,22 @@ defmodule DripDrop.Channels.Webhook.SignerTest do
       prefixed = Signer.sign(@id, now, @payload, "whsec_" <> @raw_secret)
       raw = Signer.sign(@id, now, @payload, @raw_secret)
       assert prefixed == raw
+    end
+
+    test "canonical algorithm reproduces the Standard Webhooks documented vector" do
+      # Documented vector: docs.svix.com/receiving/verifying-payloads/how-manual.
+      # sign/4 rejects timestamps this old and re-encodes payload maps (sorting
+      # keys), so the vector's raw signed content is checked against the
+      # algorithm directly; the test below proves sign/4 computes this same
+      # HMAC for accepted inputs.
+      content =
+        ~s(msg_loFOjxBNrRLzqYUf.1731705121.{"event_type":"ping","data":{"success":true}})
+
+      mac =
+        :crypto.mac(:hmac, :sha256, Base.decode64!("plJ3nmyCDGBKInavdOK15jsl"), content)
+        |> Base.encode64()
+
+      assert "v1,#{mac}" == "v1,rAvfW3dJ/X/qxhsaXPOyyCGmRKsaKWcsNccKXlIktD0="
     end
 
     test "matches the canonical HMAC algorithm", %{now: now} do

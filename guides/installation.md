@@ -47,6 +47,41 @@ accepted by `DripDrop.Vault`.
 For host apps that already run Oban, set `scheduler: DripDrop.Schedulers.Oban`
 and configure the host Oban supervision tree with a `:dripdrop` queue.
 
+## Supervision
+
+The PgFlow scheduler only enqueues work; something still has to poll pgmq and
+execute it. Add a `{PgFlow, ...}` child to the host application's supervision
+tree, after the host Ecto repo and before the Endpoint:
+
+```elixir
+children = [
+  MyApp.Repo,
+  {PgFlow,
+   repo: MyApp.Repo,
+   jobs: [DripDrop.Jobs.DispatchStep, DripDrop.Jobs.CronTick],
+   signal_strategy: :notify,
+   notify_throttle_ms: 50,
+   notify_fallback_interval: 250},
+  MyAppWeb.Endpoint
+]
+```
+
+List every job module that must run under this worker, not just DripDrop's
+own `DispatchStep` and `CronTick` — any host job modules (`use PgFlow.Job`)
+belong in the same `jobs:` list, since PgFlow only starts a poller for job
+modules it is told about. The `jobs:` list under `config :dripdrop, :pgflow`
+is a separate, DripDrop-only setting that `DripDrop.startup_check/0` reads to
+confirm `DispatchStep` was wired up; it does not register anything with
+PgFlow, so host jobs never need to be listed there.
+
+Without this child, `DripDrop.startup_check/0` reports
+`pgflow_job_not_registered` and DripDrop dispatches never execute — enrollment
+enqueues rows that sit in pgmq forever.
+
+Omit this child (or gate it behind a config flag) in test environments that
+configure `scheduler: DripDrop.Schedulers.Test`: a live poller would race to
+claim and execute pgmq rows that other tests enqueue.
+
 ## Migrations
 
 PgFlow is the recommended scheduler. Generate PgFlow migrations first:

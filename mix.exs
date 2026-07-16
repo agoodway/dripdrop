@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -47,8 +47,10 @@ defmodule DripDrop.MixProject do
       {:crontab, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
       {:predicated, "~> 1.1"},
-      {:nebulex, "~> 3.0"},
-      {:nebulex_local, "~> 3.0"},
+      # Nebulex 2 ships the Local adapter in core; Nebulex 3 moved it to
+      # nebulex_local (same module name), so nebulex_local is only needed on 3.x
+      {:nebulex, "~> 2.6 or ~> 3.0"},
+      {:nebulex_local, "~> 3.0", optional: true},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:plug, "~> 1.17"},
@@ -63,7 +65,7 @@ defmodule DripDrop.MixProject do
       {:liquex, "~> 0.15"},
       {:mjml, "~> 2.0", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
-      {:phoenix, "~> 1.8", optional: true},
+      {:phoenix, "~> 1.7 or ~> 1.8", optional: true},
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:oban, "~> 2.22", optional: true},
       {:ex_aws_sns, "~> 2.3", optional: true},

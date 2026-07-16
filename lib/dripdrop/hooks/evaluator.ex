@@ -224,7 +224,7 @@ defmodule DripDrop.Hooks.Evaluator do
   defp cache(context, key, fun) do
     cache_key = {:dripdrop_hook_cache, Map.get(context, :step_execution_id), key}
 
-    case Cache.get(cache_key) do
+    case Cache.lookup(cache_key) do
       {:ok, nil} ->
         cache_result(cache_key, context, fun)
 

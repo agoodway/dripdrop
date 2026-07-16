@@ -80,7 +80,7 @@ defmodule DripDrop.Web.WebhookPlug do
   end
 
   defp request(conn) do
-    with {:ok, raw_body, conn} <- read_full_body(conn) do
+    with {:ok, raw_body, conn} <- fetch_raw_body(conn) do
       body_params = decode_body(raw_body, get_req_header(conn, "content-type"))
       request_params = if is_map(body_params), do: body_params, else: %{}
 
@@ -95,6 +95,17 @@ defmodule DripDrop.Web.WebhookPlug do
        }}
     end
   end
+
+  # Hosts whose endpoint runs Plug.Parsers ahead of this plug (via a custom
+  # body_reader) already consumed the request body before it reaches here, so
+  # the raw bytes are read back from conn.assigns instead of the connection.
+  # The assign holds iodata (a list of chunks), reassembled into a binary.
+  defp fetch_raw_body(%Plug.Conn{assigns: %{raw_body: raw_body}} = conn)
+       when not is_nil(raw_body) do
+    {:ok, IO.iodata_to_binary(raw_body), conn}
+  end
+
+  defp fetch_raw_body(conn), do: read_full_body(conn)
 
   defp read_full_body(conn, acc \\ "") do
     max = max_body_bytes()

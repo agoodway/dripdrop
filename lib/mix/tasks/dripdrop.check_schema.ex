@@ -59,7 +59,7 @@ defmodule Mix.Tasks.Dripdrop.CheckSchema do
     repo = MixHelpers.resolve_repo(opts[:repo])
     prefix = Keyword.get(opts, :prefix, "dripdrop")
 
-    {:ok, _started} = repo.start_link(pool_size: 2)
+    start_repo(repo)
 
     installed = installed_version(repo, prefix)
     current = DripDrop.Migration.current_version()
@@ -192,6 +192,14 @@ defmodule Mix.Tasks.Dripdrop.CheckSchema do
     case repo.query(query, params) do
       {:ok, %{num_rows: count}} when count > 0 -> true
       _other -> false
+    end
+  end
+
+  defp start_repo(repo) do
+    case repo.start_link(pool_size: 2) do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+      {:error, error} -> raise "Failed to start repo: #{inspect(error)}"
     end
   end
 end

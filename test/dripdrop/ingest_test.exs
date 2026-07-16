@@ -410,6 +410,37 @@ defmodule DripDrop.IngestTest do
 
       assert conn.status == 413
     end
+
+    test "uses the host-preserved raw body when Plug.Parsers already consumed the request" do
+      %{adapter: adapter} = delivery_context("msg-preserved-body")
+      body = mailgun_body("delivered", "evt-preserved-body", "msg-preserved-body")
+      signed = Jason.encode!(signed_mailgun_body(body))
+
+      conn =
+        :post
+        |> Plug.Test.conn("/mailgun/#{adapter.id}", "")
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Plug.Conn.assign(:raw_body, [signed])
+        |> WebhookPlug.call([])
+
+      assert conn.status == 202
+      assert TestRepo.one!(MessageEvent).provider_event_id == "evt-preserved-body"
+    end
+
+    test "reads the raw body directly when no host-preserved assign is present" do
+      %{adapter: adapter} = delivery_context("msg-fresh-read")
+      body = mailgun_body("delivered", "evt-fresh-read", "msg-fresh-read")
+
+      conn =
+        :post
+        |> Plug.Test.conn("/mailgun/#{adapter.id}", Jason.encode!(signed_mailgun_body(body)))
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> WebhookPlug.call([])
+
+      assert conn.status == 202
+      assert TestRepo.one!(MessageEvent).provider_event_id == "evt-fresh-read"
+      refute conn.assigns[:raw_body]
+    end
   end
 
   describe "unsubscribe plug" do

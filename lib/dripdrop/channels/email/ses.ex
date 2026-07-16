@@ -93,7 +93,7 @@ defmodule DripDrop.Channels.Email.SES do
   defp fetch_certificate(url) do
     cache_key = {__MODULE__, :sns_cert, url}
 
-    case Cache.get(cache_key) do
+    case Cache.lookup(cache_key) do
       {:ok, cert} when not is_nil(cert) ->
         {:ok, cert}
 

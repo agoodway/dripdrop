@@ -19,7 +19,7 @@ defmodule DripDrop.Channels.Email.OAuthToken do
   def get(adapter, provider) do
     cache_key = {__MODULE__, provider, adapter.id}
 
-    case Cache.get(cache_key) do
+    case Cache.lookup(cache_key) do
       {:ok, token} when is_binary(token) -> {:ok, token}
       _miss -> refresh(adapter, provider, cache_key)
     end

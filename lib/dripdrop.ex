@@ -18,6 +18,7 @@ defmodule DripDrop do
     HttpHooks,
     Inbound,
     SequenceAuthoring,
+    SequenceReaders,
     StartupCheck,
     Suppressions,
     Web
@@ -63,6 +64,42 @@ defmodule DripDrop do
   @doc "Validates a sequence version before activation."
   @spec validate_sequence_version(Ecto.UUID.t()) :: {:ok, Ecto.Schema.t()} | {:error, list()}
   defdelegate validate_sequence_version(version_id), to: SequenceAuthoring
+
+  @doc """
+  Fetches a sequence by `key` within a tenant scope.
+
+  Pass `nil` for `tenant_key` to look up a global (tenant-less) sequence.
+  """
+  @spec get_sequence(binary() | nil, String.t()) :: Ecto.Schema.t() | nil
+  defdelegate get_sequence(tenant_key, sequence_key), to: SequenceReaders
+
+  @doc "Gets a sequence's currently active version, or `nil` when none is active."
+  @spec get_active_sequence_version(Ecto.UUID.t()) :: Ecto.Schema.t() | nil
+  defdelegate get_active_sequence_version(sequence_id), to: SequenceReaders
+
+  @doc "Gets a sequence's currently active version, raising when none is active."
+  @spec get_active_sequence_version!(Ecto.UUID.t()) :: Ecto.Schema.t()
+  defdelegate get_active_sequence_version!(sequence_id), to: SequenceReaders
+
+  @doc "Returns the highest authored version number for a sequence, or `0` when it has none."
+  @spec max_version_number(Ecto.UUID.t()) :: non_neg_integer()
+  defdelegate max_version_number(sequence_id), to: SequenceReaders
+
+  @doc "Gets the most recently authored step for a `key` across all of a sequence's versions."
+  @spec latest_step_by_key(Ecto.UUID.t(), String.t()) :: Ecto.Schema.t() | nil
+  defdelegate latest_step_by_key(sequence_id, step_key), to: SequenceReaders
+
+  @doc "Lists a sequence version's steps, ordered by their position."
+  @spec ordered_steps(Ecto.UUID.t()) :: [Ecto.Schema.t()]
+  defdelegate ordered_steps(version_id), to: SequenceReaders
+
+  @doc "Maps a sequence version's steps by their `key`."
+  @spec steps_by_key(Ecto.UUID.t()) :: %{String.t() => Ecto.Schema.t()}
+  defdelegate steps_by_key(version_id), to: SequenceReaders
+
+  @doc "Gets the global (tenant-less) channel adapter for a channel and provider."
+  @spec get_global_channel_adapter(binary(), binary()) :: Ecto.Schema.t() | nil
+  defdelegate get_global_channel_adapter(channel, provider), to: ChannelAdapters
 
   @doc "Creates a channel adapter."
   @spec create_channel_adapter(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}

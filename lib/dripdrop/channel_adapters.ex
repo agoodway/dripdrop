@@ -92,6 +92,21 @@ defmodule DripDrop.ChannelAdapters do
     scoped_default(channel, tenant_key) || scoped_default(channel, nil)
   end
 
+  @spec get_global_channel_adapter(binary(), binary()) :: Ecto.Schema.t() | nil
+  @doc """
+  Fetches the global (tenant-less) channel adapter for a channel and provider.
+
+  Returns `nil` when no such adapter has been created yet.
+  """
+  def get_global_channel_adapter(channel, provider) do
+    ChannelAdapter
+    |> where([adapter], is_nil(adapter.tenant_key))
+    |> where([adapter], adapter.channel == ^channel)
+    |> where([adapter], adapter.provider == ^provider)
+    |> limit(1)
+    |> Repo.one()
+  end
+
   @spec select(term(), term(), term()) ::
           {:ok, Ecto.Schema.t()} | {:error, %{kind: :permanent, reason: :no_adapter}}
   @doc """

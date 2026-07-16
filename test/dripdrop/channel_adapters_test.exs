@@ -152,6 +152,34 @@ defmodule DripDrop.ChannelAdaptersTest do
     end
   end
 
+  describe "get_global_channel_adapter/2" do
+    test "returns the global adapter for a channel and provider" do
+      global =
+        Fixtures.channel_adapter_fixture(%{
+          tenant_key: nil,
+          provider: "mailgun",
+          credentials: %{"api_key" => "secret", "domain" => "mg.example.com"}
+        })
+
+      assert %{id: id} = ChannelAdapters.get_global_channel_adapter("email", "mailgun")
+      assert id == global.id
+    end
+
+    test "returns nil when no global adapter has been created for that channel/provider" do
+      assert is_nil(ChannelAdapters.get_global_channel_adapter("email", "mailgun"))
+    end
+
+    test "does not return a tenant-scoped adapter for the same channel and provider" do
+      Fixtures.channel_adapter_fixture(%{
+        tenant_key: "tenant-a",
+        provider: "mailgun",
+        credentials: %{"api_key" => "secret", "domain" => "mg.example.com"}
+      })
+
+      assert is_nil(ChannelAdapters.get_global_channel_adapter("email", "mailgun"))
+    end
+  end
+
   describe "adapter selection" do
     test "step adapter override wins over defaults" do
       default = Fixtures.channel_adapter_fixture(%{tenant_key: "tenant-a", is_default: true})
