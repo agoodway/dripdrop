@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.2.0"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -41,7 +41,7 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, "~> 0.1.0"},
+      {:pgflow, "~> 0.2.0"},
       # {:pgflow, path: "../pgflow"},
       {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
