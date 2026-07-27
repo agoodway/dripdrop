@@ -141,6 +141,7 @@ defmodule DripDrop.MixProject do
         "guides/quiet_hours.md",
         "guides/short_links.md",
         "guides/oauth_providers.md",
+        "guides/cold_outbound.md",
         "guides/operations.md",
         "guides/extending.md"
       ],

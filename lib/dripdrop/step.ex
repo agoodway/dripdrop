@@ -15,6 +15,8 @@ defmodule DripDrop.Step do
   @channels ~w(email sms webhook pubsub slack telegram whatsapp)
   @template_types ~w(inline module external)
 
+  @type t :: %__MODULE__{}
+
   schema "steps" do
     field(:tenant_key, :string)
     field(:name, :string)
