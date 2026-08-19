@@ -20,12 +20,7 @@ defmodule DripdropDemo.Application do
     children =
       [
         DripdropDemo.Repo,
-        {PgFlow,
-         repo: DripdropDemo.Repo,
-         jobs: [DispatchStep, CronTick, PruneSequenceRuns],
-         signal_strategy: :notify,
-         notify_throttle_ms: 50,
-         notify_fallback_interval: 250},
+        pgflow_child(),
         DripdropDemoWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:dripdrop_demo, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: DripdropDemo.PubSub},
@@ -50,6 +45,17 @@ defmodule DripdropDemo.Application do
   defp mock_hooks_child do
     if @start_mock_hooks? and Code.ensure_loaded?(DripdropDemo.MockHooks) do
       DripdropDemo.MockHooks
+    end
+  end
+
+  defp pgflow_child do
+    if Application.get_env(:dripdrop, :scheduler) == DripDrop.Schedulers.Pgflow do
+      {PgFlow,
+       repo: DripdropDemo.Repo,
+       jobs: [DispatchStep, CronTick, PruneSequenceRuns],
+       signal_strategy: :notify,
+       notify_throttle_ms: 50,
+       notify_fallback_interval: 250}
     end
   end
 

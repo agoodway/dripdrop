@@ -56,6 +56,7 @@ defmodule DripDrop.TestSupport.Integration.Scenarios do
         key: "follow-up",
         position: 2,
         channel_adapter_id: adapter.id,
+        timing: Keyword.get(opts, :next_step_timing, %{type: "immediate"}),
         template_content: %{
           "from" => "team@#{domain}",
           "subject" => "Next step",

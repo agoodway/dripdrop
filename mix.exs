@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -41,17 +41,15 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, "~> 0.2.0"},
+      {:pgflow, "~> 0.3.1"},
       # {:pgflow, path: "../pgflow"},
       {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
       {:predicated, "~> 1.1"},
-      # Nebulex 2 ships the Local adapter in core; Nebulex 3 moved it to
-      # nebulex_local (same module name), so nebulex_local is only needed on 3.x
-      {:nebulex, "~> 2.6 or ~> 3.0"},
-      {:nebulex_local, "~> 3.0", optional: true},
-      {:req, "~> 0.5"},
+      {:nebulex, "~> 3.0"},
+      {:nebulex_local, "~> 3.0"},
+      {:req, "~> 0.7"},
       {:jason, "~> 1.4"},
       {:plug, "~> 1.17"},
       {:floki, "~> 0.37"},
@@ -63,13 +61,13 @@ defmodule DripDrop.MixProject do
       {:swoosh, "~> 1.19", optional: true},
       {:finch, "~> 0.20", optional: true},
       {:liquex, "~> 0.15"},
-      {:mjml, "~> 2.0", optional: true},
+      {:mjml, "~> 6.0", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:phoenix, "~> 1.7 or ~> 1.8", optional: true},
       {:phoenix_live_view, "~> 1.1", optional: true},
       {:oban, "~> 2.22", optional: true},
       {:ex_aws_sns, "~> 2.3", optional: true},
-      {:ex_gram, "~> 0.65.0", optional: true},
+      {:ex_gram, "~> 0.69.0", optional: true},
       {:whatsapp_sdk, "~> 0.1.0", optional: true},
 
       # Development tooling

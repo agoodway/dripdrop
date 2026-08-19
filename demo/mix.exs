@@ -41,18 +41,24 @@ defmodule DripdropDemo.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:dripdrop, "~> 0.1.0"},
+      {:dripdrop, "~> 0.2.0"},
       # {:dripdrop, path: ".."},
+      # The demo runs PgFlow workers directly, so keep its runtime requirement
+      # explicit instead of relying only on DripDrop's transitive constraint.
+      {:pgflow, "~> 0.3.1", override: true},
       {:phoenix, "~> 1.8.5"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
+      {:nebulex, "~> 3.0"},
+      {:nebulex_local, "~> 3.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.1.0"},
-      {:tidewave, "~> 0.5", only: :dev},
+      {:phoenix_live_view, "~> 1.2.9"},
+      {:tidewave, "~> 0.9", only: :dev},
       {:lazy_html, ">= 0.1.0", only: :test},
-      {:phoenix_live_dashboard, "~> 0.8.3"},
+      {:phoenix_live_dashboard, "~> 0.9.0"},
+      {:livefilter, "~> 0.2.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:heroicons,
@@ -63,8 +69,8 @@ defmodule DripdropDemo.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.16"},
-      {:req, "~> 0.5"},
-      {:ex_gram, "~> 0.65.0"},
+      {:req, "~> 0.7", override: true},
+      {:ex_gram, "~> 0.69.0", override: true},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
@@ -74,8 +80,8 @@ defmodule DripdropDemo.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_slop, "~> 0.3", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
-      {:doctor, "~> 0.22", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.15", only: [:dev, :test], runtime: false},
+      {:doctor, "~> 0.23", only: [:dev, :test], runtime: false},
       {:ex_dna, "~> 1.2", only: [:dev, :test], runtime: false},
       {:makeup_elixir, "~> 1.0"}
     ]

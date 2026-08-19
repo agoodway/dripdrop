@@ -5,6 +5,7 @@ defmodule DripDrop.Hooks.EvaluatorTest do
   alias DripDrop.Hooks.Evaluator
   alias DripDrop.Templates.Renderer
   alias Ecto.Adapters.SQL
+  import ExUnit.CaptureIO
 
   defmodule RaisingHooks do
     @moduledoc """
@@ -166,6 +167,22 @@ defmodule DripDrop.Hooks.EvaluatorTest do
       end)
 
       assert {:error, :timeout} = Evaluator.run_http_hook(hook, %{})
+    end
+
+    test "passes the hook timeout through current Req options" do
+      version = version_fixture()
+      hook = http_hook(version.sequence_id)
+
+      configure_req_stub(fn conn ->
+        Req.Test.json(conn, %{"score" => "85"})
+      end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          assert {:ok, 85.0} = Evaluator.run_http_hook(hook, %{})
+        end)
+
+      refute stderr =~ "setting `pool_timeout` is deprecated"
     end
 
     test "retries failed HTTP hooks up to the configured retry count" do

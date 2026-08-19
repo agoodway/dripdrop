@@ -113,7 +113,10 @@ defmodule DripDrop.Integration.FullStackTest do
       )
     )
 
-    scenario = Scenarios.email_full_scenario()
+    scenario =
+      Scenarios.email_full_scenario(
+        next_step_timing: %{type: "delay", delay_amount: 2, delay_unit: "seconds"}
+      )
 
     assert {:ok, enrollment} = DripDrop.enroll(scenario.enroll_attrs)
 

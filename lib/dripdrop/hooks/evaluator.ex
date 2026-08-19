@@ -124,7 +124,7 @@ defmodule DripDrop.Hooks.Evaluator do
         url: url,
         headers: headers(hook),
         receive_timeout: hook.timeout_ms,
-        pool_timeout: hook.timeout_ms,
+        finch: [pool_timeout: hook.timeout_ms],
         redirect: false
       ]
       |> maybe_put_body(body)
