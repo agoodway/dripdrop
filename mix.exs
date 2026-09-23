@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.2.1"
+  @version "0.3.0"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -41,7 +41,7 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, "~> 0.3.1"},
+      {:pgflow, "~> 0.4.0"},
       # {:pgflow, path: "../pgflow"},
       {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
@@ -49,7 +49,7 @@ defmodule DripDrop.MixProject do
       {:predicated, "~> 1.1"},
       {:nebulex, "~> 3.0"},
       {:nebulex_local, "~> 3.0"},
-      {:req, "~> 0.7"},
+      {:req, "~> 0.7.4"},
       {:jason, "~> 1.4"},
       {:plug, "~> 1.17"},
       {:floki, "~> 0.37"},
@@ -58,25 +58,27 @@ defmodule DripDrop.MixProject do
       {:ex_email, "~> 1.0"},
 
       # Optional channel/template dependencies
-      {:swoosh, "~> 1.19", optional: true},
+      {:swoosh, "~> 1.28.1", optional: true},
       {:finch, "~> 0.20", optional: true},
       {:liquex, "~> 0.15"},
       {:mjml, "~> 6.0", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
-      {:phoenix, "~> 1.7 or ~> 1.8", optional: true},
-      {:phoenix_live_view, "~> 1.1", optional: true},
-      {:oban, "~> 2.22", optional: true},
+      {:phoenix, "~> 1.8.14", optional: true},
+      {:phoenix_live_view, "~> 1.2.12", optional: true},
+      # pgflow 0.4's dashboard references LiveFilter at compile time.
+      {:livefilter, "~> 0.2.0", optional: true},
+      {:oban, "~> 2.24.1", optional: true},
       {:ex_aws_sns, "~> 2.3", optional: true},
-      {:ex_gram, "~> 0.69.0", optional: true},
+      {:ex_gram, "~> 0.70.1", optional: true},
       {:whatsapp_sdk, "~> 0.1.0", optional: true},
 
       # Development tooling
       {:stream_data, "~> 1.1", only: [:dev, :test]},
-      {:tidewave, "~> 0.5", only: :dev},
-      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
+      {:tidewave, "~> 0.9.0", only: :dev},
+      {:ex_doc, "~> 0.40.4", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:ex_slop, "~> 0.3", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_slop, "~> 0.4.5", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.8", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.22", only: [:dev, :test], runtime: false},
       {:ex_dna, "~> 1.2", only: [:dev, :test], runtime: false}
