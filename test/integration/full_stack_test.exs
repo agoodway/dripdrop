@@ -203,11 +203,13 @@ defmodule DripDrop.Integration.FullStackTest do
         execution
       end)
 
-    assert TestRepo.exists?(
-             from(event in MessageEvent,
-               where: event.step_execution_id == ^execution.id and event.event_type == "skipped"
+    eventually(fn ->
+      assert TestRepo.exists?(
+               from(event in MessageEvent,
+                 where: event.step_execution_id == ^execution.id and event.event_type == "skipped"
+               )
              )
-           )
+    end)
 
     assert_receive {:telemetry, [:dripdrop, :policy, :suppressed], %{count: 1},
                     %{channel: "email", tenant_key: "tenant-a"}}

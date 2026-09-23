@@ -44,7 +44,7 @@ defmodule DripdropDemo.MixProject do
       {:dripdrop, path: ".."},
       # The demo runs PgFlow workers directly, so keep its runtime requirement
       # explicit instead of relying only on DripDrop's transitive constraint.
-      {:pgflow, "~> 0.4.0", override: true},
+      {:pgflow, "~> 0.5.0"},
       {:phoenix, "~> 1.8.14"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},

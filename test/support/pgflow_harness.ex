@@ -34,7 +34,7 @@ defmodule DripDrop.TestSupport.PgflowHarness do
   end
 
   @doc """
-  Waits until the dispatch queue has no queued PgFlow tasks or pgmq messages.
+  Waits until the dispatch queue has no messages ready for delivery.
   """
   @spec wait_for_idle(timeout()) :: :ok | :timeout
   def wait_for_idle(timeout_ms \\ 5_000) do
@@ -56,15 +56,9 @@ defmodule DripDrop.TestSupport.PgflowHarness do
   end
 
   defp idle? do
-    queued_tasks =
-      scalar!(
-        "SELECT count(*) FROM pgflow.step_tasks WHERE flow_slug = $1 AND status = 'queued'",
-        [@queue]
-      )
+    due_messages = scalar!("SELECT count(*) FROM pgmq.q_#{@queue} WHERE vt <= now()", [])
 
-    queued_messages = scalar!("SELECT count(*) FROM pgmq.q_#{@queue}", [])
-
-    queued_tasks == 0 and queued_messages == 0
+    due_messages == 0
   rescue
     Postgrex.Error -> false
   end

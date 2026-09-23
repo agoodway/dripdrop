@@ -26,8 +26,8 @@ defmodule DripdropDemo.Repo.Migrations.SetupPgflow do
   use Ecto.Migration
 
   def up do
-    PgFlow.Migration.up()
-    PgFlow.HelpersMigration.up()
+    PgFlow.Migration.up(version: 1)
+    PgFlow.HelpersMigration.up(version: 1)
   end
 
   def down do

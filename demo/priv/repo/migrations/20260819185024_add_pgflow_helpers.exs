@@ -7,10 +7,10 @@ defmodule DripdropDemo.Repo.Migrations.AddPgflowHelpers do
   use Ecto.Migration
 
   def up do
-    PgFlow.HelpersMigration.up()
+    PgFlow.HelpersMigration.up(version: 5)
   end
 
   def down do
-    PgFlow.HelpersMigration.down()
+    PgFlow.HelpersMigration.down(version: 1)
   end
 end
