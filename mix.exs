@@ -113,9 +113,8 @@ defmodule DripDrop.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files: ~w(
-        lib priv config guides
-        .formatter.exs .credo.exs .doctor.exs .sobelow-conf
-        mix.exs README.md LICENSE
+        lib priv/dripdrop priv/pgflow guides
+        .formatter.exs mix.exs README.md LICENSE
       )
     ]
   end
