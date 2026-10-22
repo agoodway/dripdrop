@@ -37,6 +37,7 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
     :rate_limit_backend,
     :rate_limits,
     :scheduler,
+    :tenant_timezone_resolver,
     :unsubscribe_mailto,
     :unsubscribe_secret,
     :unsubscribe_url_builder,
@@ -56,6 +57,7 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
     Application.put_env(:dripdrop, :scheduler, DripDrop.Schedulers.Test)
     Application.put_env(:dripdrop, :unsubscribe_secret, "test-unsubscribe-secret")
     Application.delete_env(:dripdrop, :unsubscribe_url_builder)
+    Application.delete_env(:dripdrop, :tenant_timezone_resolver)
 
     on_exit(fn ->
       Enum.each(previous_env, fn {key, value} -> restore_env(key, value) end)
@@ -325,6 +327,63 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
 
       assert :ok = QuietHours.check(context)
     end
+
+    test "resolves the timezone from the tenant key through the configured resolver" do
+      Application.put_env(
+        :dripdrop,
+        :tenant_timezone_resolver,
+        {__MODULE__, :tenant_timezone, [self(), "Etc/GMT+5"]}
+      )
+
+      assert {:defer, %DateTime{}, %{reason: "quiet_hours", timezone: "Etc/GMT+5"}} =
+               QuietHours.check(utc_hour_only_context())
+
+      assert_received {:tenant_timezone_requested, "tenant-a"}
+    end
+
+    test "accepts a one-arity function as the tenant timezone resolver" do
+      Application.put_env(:dripdrop, :tenant_timezone_resolver, fn "tenant-a" -> "Etc/GMT+5" end)
+
+      assert {:defer, %DateTime{}, %{timezone: "Etc/GMT+5"}} =
+               QuietHours.check(utc_hour_only_context())
+    end
+
+    test "prefers the enrollment timezone over the tenant timezone resolver" do
+      Application.put_env(
+        :dripdrop,
+        :tenant_timezone_resolver,
+        {__MODULE__, :tenant_timezone, [self(), "Etc/GMT+5"]}
+      )
+
+      context = utc_hour_only_context(enrollment: %{data: %{"timezone" => "Etc/UTC"}})
+
+      assert :ok = QuietHours.check(context)
+      refute_received {:tenant_timezone_requested, _tenant_key}
+    end
+
+    test "falls back to the default timezone when the resolver has no timezone" do
+      Application.put_env(
+        :dripdrop,
+        :tenant_timezone_resolver,
+        {__MODULE__, :tenant_timezone, [self(), nil]}
+      )
+
+      assert :ok = QuietHours.check(utc_hour_only_context())
+      assert_received {:tenant_timezone_requested, "tenant-a"}
+    end
+
+    test "returns a permanent error for a non-string resolver result" do
+      Application.put_env(:dripdrop, :tenant_timezone_resolver, fn _tenant_key -> 123 end)
+
+      assert {:error, %{kind: :permanent, reason: {:invalid_tenant_timezone, 123}}} =
+               QuietHours.check(utc_hour_only_context())
+    end
+  end
+
+  @doc false
+  def tenant_timezone(tenant_key, test_pid, timezone) do
+    send(test_pid, {:tenant_timezone_requested, tenant_key})
+    timezone
   end
 
   describe "sending rules" do
@@ -782,6 +841,21 @@ defmodule DripDrop.Policy.MessagingPolicyTest do
       },
       enrollment: %{data: %{"timezone" => "Etc/UTC"}}
     )
+  end
+
+  # A window open only during the current UTC hour, with no timezone on the
+  # step, enrollment, or sequence: sends are allowed in Etc/UTC and deferred in
+  # any zone whose local hour differs, so the outcome names the resolved zone.
+  defp utc_hour_only_context(opts \\ []) do
+    utc_hour = DateTime.utc_now().hour
+
+    [
+      step: %{
+        config: %{"quiet_hours" => %{"start" => utc_hour, "end" => rem(utc_hour + 1, 24)}}
+      }
+    ]
+    |> Keyword.merge(opts)
+    |> policy_context()
   end
 
   defp default_step_attrs do

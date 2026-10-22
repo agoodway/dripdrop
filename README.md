@@ -72,7 +72,7 @@ Add `dripdrop` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:dripdrop, "~> 0.3.1"}
+    {:dripdrop, "~> 0.3.2"}
   ]
 end
 ```

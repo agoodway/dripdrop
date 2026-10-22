@@ -12,7 +12,7 @@ defmodule DripDrop.Policy.QuietHours do
   def check(%{step: step, enrollment: enrollment} = context) do
     with {:enabled, true} <- {:enabled, enabled?(step)},
          {:ok, {start_hour, end_hour}} <- quiet_hours(step),
-         timezone <- timezone(context, enrollment),
+         {:ok, timezone} <- timezone(context, enrollment),
          {:ok, decision} <- postgres_decision(timezone, start_hour, end_hour) do
       emit_decision(decision, context, timezone, start_hour, end_hour)
     else
@@ -125,11 +125,33 @@ defmodule DripDrop.Policy.QuietHours do
   defp parse_hour(hour), do: {:error, {:invalid_quiet_hour, hour}}
 
   defp timezone(context, enrollment) do
-    enrollment_timezone(enrollment) ||
-      step_timezone(context.step) ||
-      channel_timezone(context.execution.channel) ||
-      tenant_timezone(context.sequence) ||
-      Application.get_env(:dripdrop, :default_timezone, "Etc/UTC")
+    case enrollment_timezone(enrollment) ||
+           step_timezone(context.step) ||
+           channel_timezone(context.execution.channel) ||
+           tenant_timezone(context.sequence) do
+      nil -> resolved_tenant_timezone(enrollment)
+      timezone -> {:ok, timezone}
+    end
+  end
+
+  # Asks the host for the tenant's timezone at dispatch time, so a tenant's
+  # timezone change applies to executions already scheduled. A nil answer (or
+  # no resolver) falls through to the application default.
+  defp resolved_tenant_timezone(enrollment) do
+    case resolve_tenant_timezone(Map.get(enrollment, :tenant_key)) do
+      nil -> {:ok, Application.get_env(:dripdrop, :default_timezone, "Etc/UTC")}
+      timezone when is_binary(timezone) -> {:ok, timezone}
+      other -> {:error, {:invalid_tenant_timezone, other}}
+    end
+  end
+
+  defp resolve_tenant_timezone(tenant_key) do
+    case Application.get_env(:dripdrop, :tenant_timezone_resolver) do
+      nil -> nil
+      {module, function} -> apply(module, function, [tenant_key])
+      {module, function, extra_args} -> apply(module, function, [tenant_key | extra_args])
+      fun when is_function(fun, 1) -> fun.(tenant_key)
+    end
   end
 
   defp enrollment_timezone(%{data: data}) when is_map(data),

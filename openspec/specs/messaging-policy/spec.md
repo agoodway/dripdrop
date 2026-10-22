@@ -42,6 +42,10 @@ When a step has `config["quiet_hours"]` set (or the global config is set), the s
 - **WHEN** a step's `config["quiet_hours"]` is `false`
 - **THEN** the policy gate is bypassed for that step.
 
+#### Scenario: Tenant timezone resolved by the host at dispatch
+- **WHEN** no enrollment, step, channel, or sequence timezone is set and `config :dripdrop, :tenant_timezone_resolver` is configured
+- **THEN** the resolver is called with the enrollment's `tenant_key` at dispatch time, a returned timezone is used for the quiet-hours decision, and `nil` falls back to `config :dripdrop, :default_timezone`.
+
 ### Requirement: Rate Limits Are Enforced At Multiple Scopes
 
 The system SHALL enforce rate limits at five scopes simultaneously: per-`channel_adapter_id`, per-`provider`, per-sending-domain (extracted from the `from`/`reply-to` for email), per-recipient-domain (extracted from the `to`/`recipient` address for email), and per-recipient. Limits SHALL be configurable via `channel_adapters.config["rate_limits"]` and step-level overrides. Implementation SHALL use a token-bucket against either Postgres advisory locks or a Redis backend (configurable). Limit hits SHALL reschedule (no error), not fail.

@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.3.1"
+  @version "0.3.2"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -57,7 +57,7 @@ defmodule DripDrop.MixProject do
       {:ex_email, "~> 1.0"},
 
       # Optional channel/template dependencies
-      {:swoosh, "~> 1.28.1", optional: true},
+      {:swoosh, "~> 1.29.0", optional: true},
       {:finch, "~> 0.20", optional: true},
       {:liquex, "~> 0.15"},
       {:mjml, "~> 6.0", optional: true},
@@ -68,7 +68,7 @@ defmodule DripDrop.MixProject do
       {:livefilter, "~> 0.2.0", optional: true},
       {:oban, "~> 2.24.1", optional: true},
       {:ex_aws_sns, "~> 2.3", optional: true},
-      {:ex_gram, "~> 0.70.1", optional: true},
+      {:ex_gram, "~> 0.71.0", optional: true},
       {:whatsapp_sdk, "~> 0.1.0", optional: true},
 
       # Development tooling
