@@ -69,6 +69,24 @@ provider ingest, template, hook, short-link, and channel events.
 Duplicate provider events skip duplicate persistence and emit telemetry.
 Duplicate replies can still run configured reply handling.
 
+## Deleting a Tenant
+
+When a host deletes an account, remove its DripDrop data with:
+
+```elixir
+{:ok, deleted_counts} = DripDrop.delete_tenant(tenant_key)
+```
+
+It deletes every row whose `tenant_key` matches, across all DripDrop tables,
+in one transaction, and returns the deleted count per table. Global rows
+(`tenant_key: nil`) and other tenants' rows are never selected. A `nil` or
+blank key raises `ArgumentError`.
+
+If a row outside the tenant references one of the tenant's rows, the delete
+would cascade into or null out that row, so nothing is deleted and the call
+returns `{:error, {:cross_tenant_references, references}}`, listing each
+`%{table:, column:, count:}`.
+
 ## Uninstall
 
 Generate the uninstall SQL:

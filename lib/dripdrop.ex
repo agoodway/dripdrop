@@ -21,6 +21,7 @@ defmodule DripDrop do
     SequenceReaders,
     StartupCheck,
     Suppressions,
+    Tenants,
     Web
   }
 
@@ -270,6 +271,12 @@ defmodule DripDrop do
   @doc "Replays a failed step execution with a fresh idempotency key."
   @spec replay(Ecto.UUID.t()) :: {:ok, Ecto.Schema.t()} | {:error, term()}
   defdelegate replay(step_execution_id), to: Dispatch
+
+  @doc "Deletes every row a tenant owns, refusing when another scope references them."
+  @spec delete_tenant(String.t()) ::
+          {:ok, %{atom() => non_neg_integer()}}
+          | {:error, {:cross_tenant_references, [Tenants.cross_tenant_reference()]}}
+  defdelegate delete_tenant(tenant_key), to: Tenants
 
   @doc "Returns webhook routes declared by active channel adapters."
   @spec webhook_routes() :: [Channel.webhook_route()]

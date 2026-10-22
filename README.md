@@ -72,7 +72,7 @@ Add `dripdrop` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:dripdrop, "~> 0.3.2"}
+    {:dripdrop, "~> 0.3.3"}
   ]
 end
 ```
@@ -289,6 +289,7 @@ DripDrop.suppress(attrs)
 DripDrop.replay(step_execution_id)
 DripDrop.webhook_routes()
 DripDrop.startup_check()
+DripDrop.delete_tenant(tenant_key)
 
 # Cold outbound (optional)
 DripDrop.create_adapter_pool(attrs)
