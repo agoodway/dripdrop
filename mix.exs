@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.3.3"
+  @version "0.4.0"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -41,7 +41,7 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, "~> 0.5.0"},
+      {:pgflow, "~> 0.7.0"},
       {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
@@ -51,13 +51,13 @@ defmodule DripDrop.MixProject do
       {:req, "~> 0.7.4"},
       {:jason, "~> 1.4"},
       {:plug, "~> 1.17"},
-      {:floki, "~> 0.37"},
+      {:floki, "~> 0.38.5"},
       {:telemetry, "~> 1.3"},
-      {:ex_phone_number, "~> 0.4"},
+      {:ex_phone_number, "~> 0.4.12"},
       {:ex_email, "~> 1.0"},
 
       # Optional channel/template dependencies
-      {:swoosh, "~> 1.29.0", optional: true},
+      {:swoosh, "~> 1.29.3", optional: true},
       {:finch, "~> 0.20", optional: true},
       {:liquex, "~> 0.15"},
       {:mjml, "~> 6.0", optional: true},
@@ -73,12 +73,12 @@ defmodule DripDrop.MixProject do
 
       # Development tooling
       {:stream_data, "~> 1.1", only: [:dev, :test]},
-      {:tidewave, "~> 0.9.0", only: :dev},
+      {:tidewave, "~> 0.9.2", only: :dev},
       {:ex_doc, "~> 0.40.4", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_slop, "~> 0.4.5", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4.8", only: [:dev, :test], runtime: false},
-      {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.18.1", only: [:dev, :test], runtime: false},
       {:doctor, "~> 0.22", only: [:dev, :test], runtime: false},
       {:ex_dna, "~> 1.2", only: [:dev, :test], runtime: false}
     ]

@@ -7,7 +7,9 @@ Postgres schema and uses a host application repo.
 
 DripDrop requires Elixir/OTP compatible with the project `.tool-versions`,
 Postgres 18+ (for native `uuidv7()`), a host Ecto repo, and
-`DRIPDROP_ENCRYPTION_KEY` set to a base64-encoded 32-byte key.
+`DRIPDROP_ENCRYPTION_KEY` set to a base64-encoded 32-byte key. The PgFlow
+scheduler requires PgFlow 0.7 (core schema V03, helpers V07); see
+[Upgrading PgFlow](#upgrading-pgflow) for existing installations.
 
 ## Dependencies
 
@@ -117,7 +119,16 @@ mix ecto.migrate
 ```
 
 Use `mix dripdrop.check_schema` in CI or deploy checks to verify the installed
-schema version matches the library.
+schema version matches the library. When PgFlow is the scheduler, also run
+`mix pgflow.check_schema`.
+
+## Upgrading PgFlow
+
+DripDrop 0.4 requires PgFlow 0.7 (core schema V03, helpers V07). A host that
+installed DripDrop with an earlier PgFlow upgrades its PgFlow schema before
+deploying, following PgFlow's [Upgrading to 0.7](https://github.com/agoodway/pgflow/blob/v0.7.0/README.md#upgrading-to-07) and full [upgrade guide](https://github.com/agoodway/pgflow/blob/v0.7.0/docs/UPGRADING_UPSTREAM_2026_10.md). DripDrop's job slugs (`dispatch_step`,
+`cron_tick`) pass PgFlow 0.7's slug rules, and DripDrop adds no migration of
+its own for this upgrade.
 
 ## Cold Outbound
 
