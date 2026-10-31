@@ -18,9 +18,12 @@ Run:
 
 ```bash
 mix dripdrop.check_schema
+mix pgflow.check_schema   # when PgFlow is the scheduler
 ```
 
-Use this in CI and deploy smoke checks.
+Use these in CI and deploy smoke checks. `mix pgflow.check_schema` verifies the
+PgFlow 0.7 contract (core V03, helpers V07); see the installation guide's
+"Upgrading PgFlow" section when it fails on an older schema.
 
 ## Integration Tests
 

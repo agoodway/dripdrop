@@ -60,7 +60,7 @@ Tenant scoping is represented by `tenant_key`. Query helpers that could leak ten
 - Elixir 1.17+ / OTP 26+
 - PostgreSQL 18+ (for native `uuidv7()` used by the v01 schema's UUIDv7 primary keys)
 - A host Ecto repo
-- A durable scheduler — PgFlow (recommended) or Oban
+- A durable scheduler — PgFlow 0.7 (recommended; core schema V03, helpers V07) or Oban
 - `DRIPDROP_ENCRYPTION_KEY` set to a base64-encoded 32-byte key
 
 Runtime dependencies: Ecto, Ecto SQL, Postgrex, EctoEvolver, Cloak Ecto, Req, Jason, Plug, Floki, Liquex, Nebulex local cache, Predicated, ex_phone_number, ex_email, Standard Webhooks, and PgFlow when used as the scheduler. Optional channel/provider integrations (Swoosh/Finch, MJML, Phoenix PubSub, Oban, AWS SNS, Telegram, WhatsApp SDK) are loaded only when the matching provider is used.
@@ -72,7 +72,7 @@ Add `dripdrop` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:dripdrop, "~> 0.3.3"}
+    {:dripdrop, "~> 0.4.0"}
   ]
 end
 ```
@@ -127,6 +127,10 @@ mix dripdrop.setup --repo MyApp.Repo
 # Apply everything
 mix ecto.migrate
 ```
+
+Hosts upgrading from an earlier PgFlow add a `mix pgflow.setup --upgrade`
+migration instead of rerunning `mix pgflow.setup`; see
+[Upgrading PgFlow](guides/installation.md#upgrading-pgflow).
 
 These PgFlow job migrations install DripDrop's generic scheduler workers once.
 Sequence authoring remains dynamic: new DripDrop sequences, steps, transitions,
@@ -393,8 +397,10 @@ In-depth documentation lives in the project guides:
 
 ## Changelog
 
-### Unreleased
+### 0.4.0
 
+- Requires PgFlow 0.7 (core schema V03, helpers V07). Existing hosts upgrade
+  their PgFlow schema first; see [Upgrading PgFlow](guides/installation.md#upgrading-pgflow).
 - Added optional cold outbound mode with adapter pools, enrollment-time sender
   pinning, adapter health/ramp controls, min-gap enforcement, per-sequence
   sub-caps, outbound Message-ID threading, host-callable inbound reply

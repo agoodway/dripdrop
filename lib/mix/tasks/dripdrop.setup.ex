@@ -33,6 +33,11 @@ defmodule Mix.Tasks.Dripdrop.Setup do
 
     Run `mix ecto.migrate` after PgFlow's extension, pgmq, setup, and job
     migrations have been generated.
+
+    DripDrop requires PgFlow 0.7 (core schema V03, helpers V07). A fresh
+    `mix pgflow.setup` installs both. A database already on an older PgFlow
+    schema needs a `mix pgflow.setup --upgrade` migration instead; see the
+    "Upgrading PgFlow" section of DripDrop's installation guide.
     """)
   end
 
@@ -56,7 +61,8 @@ defmodule Mix.Tasks.Dripdrop.Setup do
       Prerequisites (applied as earlier migrations):
         1. Postgres extensions — `mix pgflow.gen.postgres_extensions_migration`
         2. pgmq schema + functions — `mix pgflow.gen.pgmq_migration`
-        3. PgFlow core + helpers — `mix pgflow.setup`
+        3. PgFlow core V03 + helpers V07 — `mix pgflow.setup` (or
+           `mix pgflow.setup --upgrade` on an older PgFlow schema)
       \"\"\"
       use Ecto.Migration
 
