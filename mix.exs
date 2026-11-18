@@ -1,7 +1,7 @@
 defmodule DripDrop.MixProject do
   use Mix.Project
 
-  @version "0.4.0"
+  @version "0.4.1"
   @source_url "https://github.com/agoodway/dripdrop"
 
   def project do
@@ -41,7 +41,7 @@ defmodule DripDrop.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.20"},
-      {:pgflow, "~> 0.7.0"},
+      {:pgflow, "~> 0.7.2"},
       {:ecto_evolver, "~> 0.1.0"},
       {:crontab, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
@@ -64,8 +64,6 @@ defmodule DripDrop.MixProject do
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:phoenix, "~> 1.8.14", optional: true},
       {:phoenix_live_view, "~> 1.2.12", optional: true},
-      # PgFlow's dashboard references LiveFilter at compile time.
-      {:livefilter, "~> 0.2.0", optional: true},
       {:oban, "~> 2.24.1", optional: true},
       {:ex_aws_sns, "~> 2.3", optional: true},
       {:ex_gram, "~> 0.71.0", optional: true},

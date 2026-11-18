@@ -44,7 +44,7 @@ defmodule DripdropDemo.MixProject do
       {:dripdrop, path: ".."},
       # The demo runs PgFlow workers directly, so keep its runtime requirement
       # explicit instead of relying only on DripDrop's transitive constraint.
-      {:pgflow, "~> 0.7.0"},
+      {:pgflow, "~> 0.7.2"},
       {:phoenix, "~> 1.8.14"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
@@ -57,7 +57,6 @@ defmodule DripdropDemo.MixProject do
       {:tidewave, "~> 0.9.2", only: :dev},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_dashboard, "~> 0.9.1"},
-      {:livefilter, "~> 0.2.0"},
       {:esbuild, "~> 0.10.1", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.5.2", runtime: Mix.env() == :dev},
       {:heroicons,

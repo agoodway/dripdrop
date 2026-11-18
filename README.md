@@ -72,7 +72,7 @@ Add `dripdrop` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:dripdrop, "~> 0.4.0"}
+    {:dripdrop, "~> 0.4.1"}
   ]
 end
 ```
@@ -396,6 +396,11 @@ In-depth documentation lives in the project guides:
 - [`extending.md`](guides/extending.md) — custom channels and short-link adapters
 
 ## Changelog
+
+### 0.4.1
+
+- Requires PgFlow 0.7.2, which compiles its optional dashboard only when LiveFilter is
+  installed, so DripDrop no longer depends on LiveFilter.
 
 ### 0.4.0
 
